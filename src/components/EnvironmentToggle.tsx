@@ -1,9 +1,7 @@
 import type { Environment } from "../api/types";
 
-const ENVIRONMENTS: { value: Environment; label: string }[] = [
-  { value: "prod", label: "Prod" },
-  { value: "qa", label: "QA" },
-];
+// QA shouldn't be reachable from the UI - only prod is offered here.
+const ENVIRONMENTS: { value: Environment; label: string }[] = [{ value: "prod", label: "Prod" }];
 
 interface EnvironmentToggleProps {
   value: Environment;

@@ -340,7 +340,7 @@ export function App() {
           </p>
 
           {devModeEnabled && <EnvironmentToggle value={environment} onChange={setEnvironment} />}
-          {devModeEnabled && <ViewModeToggle value={viewMode} onChange={setViewMode} />}
+          <ViewModeToggle value={viewMode} onChange={setViewMode} />
 
           {activeTab !== "guildchat" && (
             <>
@@ -390,16 +390,14 @@ export function App() {
                   >
                     GO
                   </button>
-                  {devModeEnabled && (
-                    <button
-                      type="button"
-                      disabled={rawPlayerData === null}
-                      onClick={exportPlayerData}
-                      className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm text-neutral-700 outline-none transition-colors hover:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:border-neutral-600 dark:text-neutral-300 dark:active:bg-neutral-900/40"
-                    >
-                      Export JSON
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    disabled={rawPlayerData === null}
+                    onClick={exportPlayerData}
+                    className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm text-neutral-700 outline-none transition-colors hover:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:border-neutral-600 dark:text-neutral-300 dark:active:bg-neutral-900/40"
+                  >
+                    Export JSON
+                  </button>
                 </div>
               </form>
               {resources && <ResourceTokens resources={resources} adViewsRemaining={adViewsRemaining} />}
@@ -411,7 +409,7 @@ export function App() {
             </>
           )}
 
-          {devModeEnabled && <Tabs tabs={TABS} active={activeTab} onChange={setActiveTab} />}
+          <Tabs tabs={TABS} active={activeTab} onChange={setActiveTab} />
 
           <div className="w-full overflow-x-auto pt-2">
             {activeTab === "operations" && (
