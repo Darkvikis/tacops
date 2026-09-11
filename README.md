@@ -48,11 +48,13 @@ frontend, swapping the Rust backend for a small serverless proxy (see below).
   can't freeze the UI; each pass is time-boxed and checked for integrality, falling back to the
   last fully-valid pass (with a warning) or, if nothing usable was found at all, clearing the
   suggestions and telling the user to fill that board in manually.
-- `src/characters/character-power.ts` — computes each character's real in-game power (health,
-  damage, crit/block, ability power, trait/movement modifiers) from a player's raw API response
-  plus a trimmed slice of Snowprint's GameConfig, matching the game's own formula. This is what the
-  solver above uses to rank characters, instead of the coarser `rank` field. See "Updating
-  character-power data" below for how its bundled GameConfig data gets refreshed.
+- `src/characters/character-power.ts` — computes each unit's real in-game power from a player's raw
+  API response plus a trimmed slice of Snowprint's GameConfig, matching the game's own formula.
+  Characters use the full health/damage/crit/block + active/passive/relic ability + trait/movement
+  formula; Machines of War (`calculateUnitPowers`, which also returns a `type`) use only their
+  primary/secondary/mythic ability power. This is what the solver above uses to rank characters,
+  instead of the coarser `rank` field. See "Updating character-power data" below for how its
+  bundled GameConfig data gets refreshed.
 - `src/board/`, `src/characters/`, `src/rank/`, `src/rarity/`, `src/progression/`, `src/factions/`
   — pure `.ts` logic: decoding raw save-data fields (`progressionIndex`, `rank`, ...) into
   domain enums, resolving game-data ids (traits, damage profiles, factions, portraits, ...) to
@@ -98,16 +100,20 @@ builds the native MSI/NSIS installers) and run one of two ways:
 
 `src/characters/character-power.ts` computes power from three small JSON files bundled at
 `src/assets/character-power-{units,items,upgrades}.json` — a trimmed slice of Snowprint's
-GameConfig, not the full ~18 MB document. Because the calculation is version-sensitive (it throws
-if the response contains a character the bundled config doesn't know about), these need
-re-extracting whenever a new GameConfig ships, i.e. every game patch:
+GameConfig, not the full ~18 MB document (the `units` slice carries `lineup`, the
+`heroProgressionSteps*` tables including `heroProgressionStepsMoW` for Machines of War, and the
+`abilityPowerCurve` / `*Modifiers` maps). Because the calculation is version-sensitive (it throws
+if the response contains a unit the bundled config doesn't know about), these need re-extracting
+whenever a new GameConfig ships, i.e. every game patch. There's no extraction script in this repo
+for that anymore — it's the `character_power` job in `datamine_tacticus`'s `extract_all.ts`, run
+from a `datamine_tacticus` checkout:
 
 ```sh
-npm run extract-character-power-config -- <path-to-GameConfig.json>
+npx tsx extract_all.ts character_power --gameconfig <path-to-GameConfig.json> --output-dir <path-to-tacops>/src/assets
 ```
 
-This overwrites the three `src/assets/character-power-*.json` files and prints each one's size —
-worth a glance to make sure nothing ballooned unexpectedly.
+This overwrites the three `src/assets/character-power-*.json` files here and prints each one's
+size — worth a glance to make sure nothing ballooned unexpectedly.
 
 **Use the current live/public GameConfig only.** Datamine repos (e.g. `datamine_tacticus`) often
 carry a newer, still-embargoed snapshot alongside the live one — don't extract from whichever

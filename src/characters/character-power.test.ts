@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { calculateCharacterPowers } from "./character-power";
+import { calculateCharacterPowers, calculateUnitPowers } from "./character-power";
 
-function gameConfig(overrides: { unit?: Record<string, unknown> } = {}) {
+function gameConfig(overrides: { unit?: Record<string, unknown>; items?: Record<string, unknown> } = {}) {
   return {
     units: {
       lineup: {
@@ -20,17 +20,18 @@ function gameConfig(overrides: { unit?: Record<string, unknown> } = {}) {
       },
       heroProgressionSteps: [{ unitStatMultiplierPct: 100, abilityPowerMultiplier: 100 }],
       heroProgressionStepsPerUnit: {},
+      heroProgressionStepsMoW: [{ abilityPowerMultiplier: 100 }],
       damageProfileModifiers: { Bolter: 100 },
-      abilityPowerCurve: { active: [10, 20], passive: [5, 15] },
+      abilityPowerCurve: { active: [10, 20], passive: [5, 15], relic: [100, 200] },
       abilityPowerModifiers: {},
       traitPowerModifiers: {},
     },
-    items: {},
+    items: overrides.items ?? {},
     upgrades: {},
   };
 }
 
-function response(progress: Record<string, unknown> = {}) {
+function response(progress: Record<string, unknown> = {}, playerItems: Record<string, unknown> = {}) {
   return {
     player: {
       hero: {
@@ -39,7 +40,7 @@ function response(progress: Record<string, unknown> = {}) {
             testUnit: { progressionIndex: 0, rank: 0, active: 2, passive: 2, upgrades: [], ...progress },
           },
         },
-        items: { items: {} },
+        items: { items: playerItems },
       },
     },
   };
@@ -70,10 +71,20 @@ describe("calculateCharacterPowers", () => {
     expect(highRank.power).toBeGreaterThan(lowRank.power);
   });
 
+  it("adds equipped relic ability power on top of the base character power", () => {
+    const withoutRelic = calculateCharacterPowers(response(), gameConfig())[0];
+    const withRelic = calculateCharacterPowers(
+      response({ items: { slot1: "inst1" } }, { inst1: { itemId: "relicA", level: 2 } }),
+      gameConfig({ items: { relicA: { abilityId: "relicAbilityA", levels: [{ stats: {} }, { stats: {} }] } } }),
+    )[0];
+
+    expect(withRelic.power).toBeGreaterThan(withoutRelic.power);
+  });
+
   it("omits Machines of War", () => {
     const result = calculateCharacterPowers(
       response(),
-      gameConfig({ unit: { traits: ["MachineOfWar"] } }),
+      gameConfig({ unit: { traits: ["MachineOfWar"], activeAbilities: ["activeA", "passiveA"] } }),
     );
 
     expect(result).toEqual([]);
@@ -89,5 +100,22 @@ describe("calculateCharacterPowers", () => {
     };
 
     expect(() => calculateCharacterPowers(withUnknownUnit, gameConfig())).toThrow(/unknownUnit/);
+  });
+});
+
+describe("calculateUnitPowers", () => {
+  it("scores a Machine of War from its ability power and tags it as such", () => {
+    const result = calculateUnitPowers(
+      response(),
+      gameConfig({ unit: { traits: ["MachineOfWar"], activeAbilities: ["activeA", "passiveA"] } }),
+    );
+
+    expect(result).toEqual([{ unitId: "testUnit", name: "Test Unit", power: 3510, type: "machineOfWar" }]);
+  });
+
+  it("tags characters as characters", () => {
+    const result = calculateUnitPowers(response(), gameConfig());
+
+    expect(result).toEqual([{ unitId: "testUnit", name: "Test Unit", power: 3514, type: "character" }]);
   });
 });

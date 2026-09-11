@@ -9,8 +9,7 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "worker:dev": "vite build && wrangler dev",
-    "test": "vitest run",
-    "extract-character-power-config": "node scripts/extract-character-power-config.ts"
+    "test": "vitest run"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
