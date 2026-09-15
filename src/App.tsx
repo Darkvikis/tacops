@@ -9,6 +9,7 @@ import { OperationsTable } from "./components/OperationsTable";
 import { OperationsCards } from "./components/OperationsCards";
 import { CharactersTable } from "./components/CharactersTable";
 import { MowTable } from "./components/MowTable";
+import { GuildChatTab } from "./components/GuildChatTab";
 import { BoardCoverageTab } from "./components/BoardCoverageTab";
 import { CrusadeTab } from "./components/CrusadeTab";
 import { RewardPriorityPicker } from "./components/RewardPriorityPicker";
@@ -26,6 +27,7 @@ import type { CrusadeData, Environment, ExpeditionBoardEntry, PlanetLeaderboard,
 
 const TABS = [
   { id: "operations", label: "Operations" },
+  { id: "guildchat", label: "Guild Chat" },
   { id: "characters", label: "Characters" },
   { id: "mows", label: "Machines of War" },
   { id: "coverage", label: "Board Coverage" },
@@ -322,70 +324,74 @@ export function App() {
           {devModeEnabled && <EnvironmentToggle value={environment} onChange={setEnvironment} />}
           {devModeEnabled && <ViewModeToggle value={viewMode} onChange={setViewMode} />}
 
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              go();
-            }}
-            className="flex flex-col items-center gap-2"
-          >
-            {!isTauri() && (
-              <>
-                <input
-                  type="text"
-                  name="userId"
-                  autoComplete="username"
-                  placeholder="User ID"
-                  value={userId}
-                  onChange={(e) => setUserId(e.target.value)}
-                  className="w-64 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 outline-none focus:border-blue-500 dark:border-neutral-600 dark:bg-neutral-900/60 dark:text-white"
-                />
-                <div className="relative w-64">
-                  <input
-                    type={showClientSecret ? "text" : "password"}
-                    name="clientSecret"
-                    autoComplete="current-password"
-                    placeholder="Client secret"
-                    value={clientSecret}
-                    onChange={(e) => setClientSecret(e.target.value)}
-                    className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 pr-14 text-neutral-900 outline-none focus:border-blue-500 dark:border-neutral-600 dark:bg-neutral-900/60 dark:text-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setShowClientSecret((v) => !v)}
-                    className="absolute inset-y-0 right-0 px-3 text-sm text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
-                  >
-                    {showClientSecret ? "Hide" : "Show"}
-                  </button>
-                </div>
-              </>
-            )}
-            <div className="flex items-center gap-2">
-              <button
-                type="submit"
-                disabled={fetchState === "loading"}
-                className="rounded-lg border border-transparent bg-white px-5 py-2.5 font-medium text-neutral-900 shadow-[0_2px_2px_rgba(0,0,0,0.2)] outline-none transition-colors hover:border-blue-500 active:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:bg-neutral-900/60 dark:text-white dark:active:bg-neutral-900/40"
+          {activeTab !== "guildchat" && (
+            <>
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  go();
+                }}
+                className="flex flex-col items-center gap-2"
               >
-                GO
-              </button>
-              {devModeEnabled && (
-                <button
-                  type="button"
-                  disabled={rawPlayerData === null}
-                  onClick={exportPlayerData}
-                  className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm text-neutral-700 outline-none transition-colors hover:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:border-neutral-600 dark:text-neutral-300 dark:active:bg-neutral-900/40"
-                >
-                  Export JSON
-                </button>
-              )}
-            </div>
-          </form>
-          {resources && <ResourceTokens resources={resources} adViewsRemaining={adViewsRemaining} />}
-          <p className="inline-flex items-center gap-2">
-            {fetchState === "loading" && <Spinner seconds={secondsRemaining} />}
-            {fetchState === "error" && <ErrorIcon />}
-            {status}
-          </p>
+                {!isTauri() && (
+                  <>
+                    <input
+                      type="text"
+                      name="userId"
+                      autoComplete="username"
+                      placeholder="User ID"
+                      value={userId}
+                      onChange={(e) => setUserId(e.target.value)}
+                      className="w-64 rounded-lg border border-neutral-300 bg-white px-3 py-2 text-neutral-900 outline-none focus:border-blue-500 dark:border-neutral-600 dark:bg-neutral-900/60 dark:text-white"
+                    />
+                    <div className="relative w-64">
+                      <input
+                        type={showClientSecret ? "text" : "password"}
+                        name="clientSecret"
+                        autoComplete="current-password"
+                        placeholder="Client secret"
+                        value={clientSecret}
+                        onChange={(e) => setClientSecret(e.target.value)}
+                        className="w-full rounded-lg border border-neutral-300 bg-white px-3 py-2 pr-14 text-neutral-900 outline-none focus:border-blue-500 dark:border-neutral-600 dark:bg-neutral-900/60 dark:text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowClientSecret((v) => !v)}
+                        className="absolute inset-y-0 right-0 px-3 text-sm text-neutral-500 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-white"
+                      >
+                        {showClientSecret ? "Hide" : "Show"}
+                      </button>
+                    </div>
+                  </>
+                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    type="submit"
+                    disabled={fetchState === "loading"}
+                    className="rounded-lg border border-transparent bg-white px-5 py-2.5 font-medium text-neutral-900 shadow-[0_2px_2px_rgba(0,0,0,0.2)] outline-none transition-colors hover:border-blue-500 active:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:bg-neutral-900/60 dark:text-white dark:active:bg-neutral-900/40"
+                  >
+                    GO
+                  </button>
+                  {devModeEnabled && (
+                    <button
+                      type="button"
+                      disabled={rawPlayerData === null}
+                      onClick={exportPlayerData}
+                      className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm text-neutral-700 outline-none transition-colors hover:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:border-neutral-600 dark:text-neutral-300 dark:active:bg-neutral-900/40"
+                    >
+                      Export JSON
+                    </button>
+                  )}
+                </div>
+              </form>
+              {resources && <ResourceTokens resources={resources} adViewsRemaining={adViewsRemaining} />}
+              <p className="inline-flex items-center gap-2">
+                {fetchState === "loading" && <Spinner seconds={secondsRemaining} />}
+                {fetchState === "error" && <ErrorIcon />}
+                {status}
+              </p>
+            </>
+          )}
 
           {devModeEnabled && <Tabs tabs={TABS} active={activeTab} onChange={setActiveTab} />}
 
@@ -443,6 +449,7 @@ export function App() {
             )}
             {activeTab === "characters" && <CharactersTable heroes={heroes} />}
             {activeTab === "mows" && <MowTable machinesOfWar={machinesOfWar} />}
+            {activeTab === "guildchat" && <GuildChatTab environment={environment} />}
             {activeTab === "coverage" && <BoardCoverageTab />}
             {activeTab === "crusade" && (
               <CrusadeTab
