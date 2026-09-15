@@ -27,11 +27,11 @@ import type { CrusadeData, Environment, ExpeditionBoardEntry, PlanetLeaderboard,
 
 const TABS = [
   { id: "operations", label: "Operations" },
+  { id: "crusade", label: "Crusade" },
   { id: "guildchat", label: "Guild Chat" },
   { id: "characters", label: "Characters" },
   { id: "mows", label: "Machines of War" },
   { id: "coverage", label: "Board Coverage" },
-  { id: "crusade", label: "Crusade" },
 ];
 
 const FETCH_COUNTDOWN_SECONDS = 60;
