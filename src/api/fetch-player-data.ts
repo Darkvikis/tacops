@@ -3,7 +3,7 @@ import { invokeWithTimeout } from "./invoke-with-timeout";
 import { fetchWithTimeout } from "./fetch-with-timeout";
 import characterData from "../assets/character-data.json";
 import mowData from "../assets/mow-data.json";
-import { calculateBundledCharacterPowers } from "../characters/character-power";
+import { calculateBundledUnitPowers } from "../characters/character-power";
 import {
   computeGuildBossBombTimings,
   computeGuildBossTimings,
@@ -63,11 +63,12 @@ export async function fetchPlayerData(
     ...(data as object),
   }));
 
-  // All-or-nothing: a single missing/stale unit definition (e.g. a character added since the
-  // bundled GameConfig extraction) throws for the whole batch rather than returning some units
-  // with power and others without, so a mixed-confidence power state never reaches the solver.
+  // All-or-nothing: a single missing/stale unit definition (e.g. a unit added since the bundled
+  // GameConfig extraction) throws for the whole batch rather than returning some units with power
+  // and others without, so a mixed-confidence power state never reaches the solver. Covers both
+  // characters and Machines of War; the loop below stamps power onto whichever it matches.
   try {
-    const powers = calculateBundledCharacterPowers(response);
+    const powers = calculateBundledUnitPowers(response);
     const powerByUnitId = new Map(powers.map((p) => [p.unitId, p.power]));
     for (const unit of units) {
       const power = powerByUnitId.get(unit.id);

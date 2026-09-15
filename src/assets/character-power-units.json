@@ -18306,8 +18306,8 @@
       "eligibilityRequirements": {
         "canDropIfHeroUnlocked": true,
         "canDropIfHeroNotUnlocked": true,
-        "timestampIfHeroUnlocked": 1786406400000,
-        "timestampIfHeroNotUnlocked": 1792454400000
+        "timestampIfHeroUnlocked": 1792454400000,
+        "timestampIfHeroNotUnlocked": 1798502400000
       },
       "releaseStatus": "1785974400000",
       "unlockQuestIds": [
@@ -35367,11 +35367,9 @@
       ],
       "eligibilityRequirements": {
         "canDropIfHeroUnlocked": true,
-        "canDropIfHeroNotUnlocked": true,
-        "timestampIfHeroUnlocked": 1784505600000,
-        "timestampIfHeroNotUnlocked": 1786492800000
+        "canDropIfHeroNotUnlocked": true
       },
-      "releaseStatus": "1782950400000",
+      "releaseStatus": "released",
       "unlockQuestIds": [
         "hero_bloodTerminator_01"
       ],
@@ -41329,8 +41327,8 @@
       "FactionId": "LeaguesOfVotann",
       "GrandAllianceId": "Xenos",
       "BaseRarity": "Uncommon",
-      "powerMultiplier": 115,
-      "Movement": 2,
+      "powerMultiplier": 102,
+      "Movement": 3,
       "weapons": [
         {
           "hits": 4,
@@ -41701,8 +41699,8 @@
       "FactionId": "LeaguesOfVotann",
       "GrandAllianceId": "Xenos",
       "BaseRarity": "Rare",
-      "powerMultiplier": 142,
-      "Movement": 2,
+      "powerMultiplier": 126,
+      "Movement": 3,
       "weapons": [
         {
           "hits": 3,
@@ -42072,8 +42070,8 @@
       "FactionId": "LeaguesOfVotann",
       "GrandAllianceId": "Xenos",
       "BaseRarity": "Rare",
-      "powerMultiplier": 181,
-      "Movement": 2,
+      "powerMultiplier": 171,
+      "Movement": 3,
       "weapons": [
         {
           "hits": 1,
@@ -42443,7 +42441,7 @@
       "FactionId": "LeaguesOfVotann",
       "GrandAllianceId": "Xenos",
       "BaseRarity": "Epic",
-      "powerMultiplier": 91,
+      "powerMultiplier": 94,
       "Movement": 2,
       "weapons": [
         {
@@ -42459,12 +42457,13 @@
       "stats": {
         "Health": 100,
         "Damage": 32,
-        "FixedArmor": 30,
+        "FixedArmor": 28,
         "ProgressionIndex": 9
       },
       "traits": [
         "Hero",
         "PrioritisedEfficiency",
+        "RapidAssault",
         "Unstoppable"
       ],
       "activeAbilities": [
@@ -42665,8 +42664,8 @@
           16,
           4,
           6,
-          5,
-          5
+          4,
+          4
         ],
         [
           15,
@@ -42681,7 +42680,7 @@
           20,
           8,
           8,
-          6,
+          5,
           8
         ],
         [
@@ -42689,7 +42688,7 @@
           41,
           11,
           7,
-          11,
+          10,
           7
         ],
         [
@@ -42697,120 +42696,120 @@
           26,
           11,
           14,
-          12,
-          12
+          11,
+          11
         ],
         [
           49,
           49,
           18,
           13,
-          15,
-          15
+          14,
+          14
         ],
         [
           67,
           54,
           15,
           24,
-          15,
-          20
+          14,
+          19
         ],
         [
           57,
           95,
           27,
           22,
-          26,
-          20
+          24,
+          19
         ],
         [
           106,
           84,
           34,
           27,
-          29,
-          29
+          27,
+          27
         ],
         [
           120,
           120,
           41,
           35,
-          35,
-          35
+          33,
+          33
         ],
         [
           135,
           162,
           44,
           52,
-          41,
-          49
+          38,
+          45
         ],
         [
           187,
           187,
           54,
           65,
-          56,
-          56
+          53,
+          53
         ],
         [
           234,
           234,
           75,
           75,
-          71,
-          71
+          65,
+          65
         ],
         [
           293,
           293,
           94,
           94,
-          87,
-          87
+          82,
+          82
         ],
         [
           367,
           367,
           117,
           117,
-          110,
-          110
+          103,
+          103
         ],
         [
           459,
           459,
           147,
           147,
-          138,
-          138
+          129,
+          129
         ],
         [
           250,
           250,
           86,
           74,
-          81,
-          69
+          75,
+          64
         ],
         [
           269,
           231,
           86,
           74,
-          81,
-          69
+          75,
+          65
         ],
         [
           222,
           278,
           71,
           89,
-          67,
-          83
+          62,
+          78
         ]
       ]
     },
@@ -42819,8 +42818,8 @@
       "FactionId": "LeaguesOfVotann",
       "GrandAllianceId": "Xenos",
       "BaseRarity": "Legendary",
-      "powerMultiplier": 81,
-      "Movement": 2,
+      "powerMultiplier": 70,
+      "Movement": 3,
       "weapons": [
         {
           "hits": 3,
@@ -43615,7 +43614,7 @@
         "canDropIfHeroUnlocked": false,
         "canDropIfHeroNotUnlocked": false
       },
-      "releaseStatus": "1787702400000",
+      "releaseStatus": "1787616000000",
       "unlockQuestIds": [
         "hero_astarLysander_01"
       ],
@@ -43941,6 +43940,385 @@
           138,
           62,
           78
+        ]
+      ]
+    },
+    "astarEradicator": {
+      "name": "Nubari",
+      "FactionId": "AdeptusAstartes",
+      "Subfaction": "Salamanders",
+      "GrandAllianceId": "Imperial",
+      "BaseRarity": "Uncommon",
+      "powerMultiplier": 87,
+      "Movement": 2,
+      "weapons": [
+        {
+          "hits": 2,
+          "DamageProfile": "Melta"
+        },
+        {
+          "hits": 2,
+          "DamageProfile": "Melta",
+          "Range": 2
+        }
+      ],
+      "stats": {
+        "Health": 90,
+        "Damage": 24,
+        "FixedArmor": 18,
+        "ProgressionIndex": 3
+      },
+      "traits": [
+        "Hero",
+        "MkXGravis",
+        "HeavyWeapon"
+      ],
+      "activeAbilities": [
+        "TotalObliteration"
+      ],
+      "passiveAbilities": [
+        "CrucibleOfBattle"
+      ],
+      "itemSlots": [
+        "I_Crit",
+        "I_Defensive",
+        "I_Booster_Crit"
+      ],
+      "itemSlotsRelic": [
+        1
+      ],
+      "eligibilityRequirements": {
+        "canDropIfHeroUnlocked": true,
+        "canDropIfHeroNotUnlocked": true,
+        "timestampIfHeroUnlocked": 1790553600000,
+        "timestampIfHeroNotUnlocked": 1792540800000
+      },
+      "releaseStatus": "1788998400000",
+      "unlockQuestIds": [
+        "hero_astarEradicator_01"
+      ],
+      "upgrades": [
+        [
+          "upgHpC015",
+          "upgHpC004",
+          "upgDmgC009",
+          "upgDmgC011",
+          "upgArmC002",
+          "upgArmC012"
+        ],
+        [
+          "upgHpC017",
+          "upgHpC015",
+          "upgDmgU012",
+          "upgDmgU015C",
+          "upgArmC012",
+          "upgArmC001"
+        ],
+        [
+          "upgHpU017",
+          "upgHpU018C",
+          "upgDmgC007",
+          "upgDmgC004",
+          "upgArmU005",
+          "upgArmU002"
+        ],
+        [
+          "upgHpU018C",
+          "upgHpU001",
+          "upgDmgU012",
+          "upgDmgU003",
+          "upgArmU002",
+          "upgArmU010C"
+        ],
+        [
+          "upgHpU017",
+          "upgHpR003C",
+          "upgDmgU007C",
+          "upgDmgU011",
+          "upgArmR031",
+          "upgArmU001"
+        ],
+        [
+          "upgHpR017C",
+          "upgHpU006",
+          "upgDmgR007",
+          "upgDmgR012C",
+          "upgArmU010C",
+          "upgArmR015"
+        ],
+        [
+          "upgHpR021",
+          "upgHpR005",
+          "upgDmgR008C",
+          "upgDmgR003",
+          "upgArmR003C",
+          "upgArmR008C"
+        ],
+        [
+          "upgHpE021C",
+          "upgHpR013C",
+          "upgDmgR003",
+          "upgDmgE002C",
+          "upgArmR035",
+          "upgArmR001C"
+        ],
+        [
+          "upgHpR005",
+          "upgHpE007C",
+          "upgDmgE020C",
+          "upgDmgR015C",
+          "upgArmE035C",
+          "upgArmE013"
+        ],
+        [
+          "upgHpE021C",
+          "upgHpE012",
+          "upgDmgE020C",
+          "upgDmgE003",
+          "upgArmE035C",
+          "upgArmE004C"
+        ],
+        [
+          "upgHpL100",
+          "upgHpE002C",
+          "upgDmgL004C",
+          "upgDmgE002C",
+          "upgArmE035C",
+          "upgArmE012C"
+        ],
+        [
+          "upgHpE021C",
+          "upgHpL017C",
+          "upgDmgE020C",
+          "upgDmgL015C",
+          "upgArmL001",
+          "upgArmL004C"
+        ],
+        [
+          "upgHpL021C",
+          "upgHpL009C",
+          "upgDmgL204",
+          "upgDmgL002C",
+          "upgArmL020C",
+          "upgArmL008C"
+        ],
+        [
+          "upgHpL120C",
+          "upgHpL002C",
+          "upgDmgL004C",
+          "upgDmgL015C",
+          "upgArmL020C",
+          "upgArmL010C"
+        ],
+        [
+          "upgHpL021C",
+          "upgHpL009C",
+          "upgDmgL120C",
+          "upgDmgL012C",
+          "upgArmL120C",
+          "upgArmL008C"
+        ],
+        [
+          "upgHpL120C",
+          "upgHpL017C",
+          "upgDmgL120C",
+          "upgDmgL006C",
+          "upgArmL120C",
+          "upgArmL004C"
+        ],
+        [
+          "upgHpL120C",
+          "upgHpL213C",
+          "upgDmgL120C",
+          "upgDmgL213C",
+          "upgArmL120C",
+          "upgArmL213C"
+        ],
+        [
+          "upgHpL120C",
+          "upgHpL213C",
+          "upgDmgM214C",
+          "upgDmgL213C",
+          "upgArmM211C",
+          "upgArmL213C"
+        ],
+        [
+          "upgHpM143C",
+          "upgHpL213C",
+          "upgDmgM214C",
+          "upgDmgL213C",
+          "upgArmM214C",
+          "upgArmL213C"
+        ],
+        [
+          "upgHpECS",
+          "upgHpCS",
+          "upgDmgECS",
+          "upgDmgCS",
+          "upgArmECS",
+          "upgArmCS"
+        ]
+      ],
+      "upgradesStatIncrease": [
+        [
+          12,
+          12,
+          3,
+          3,
+          3,
+          3
+        ],
+        [
+          14,
+          14,
+          3,
+          5,
+          2,
+          2
+        ],
+        [
+          14,
+          21,
+          5,
+          5,
+          4,
+          4
+        ],
+        [
+          26,
+          18,
+          6,
+          6,
+          3,
+          5
+        ],
+        [
+          19,
+          37,
+          8,
+          6,
+          7,
+          4
+        ],
+        [
+          47,
+          23,
+          8,
+          10,
+          7,
+          7
+        ],
+        [
+          44,
+          44,
+          14,
+          10,
+          9,
+          9
+        ],
+        [
+          60,
+          48,
+          11,
+          18,
+          9,
+          13
+        ],
+        [
+          51,
+          86,
+          20,
+          16,
+          15,
+          12
+        ],
+        [
+          96,
+          76,
+          26,
+          20,
+          17,
+          17
+        ],
+        [
+          107,
+          107,
+          31,
+          26,
+          22,
+          22
+        ],
+        [
+          122,
+          147,
+          33,
+          39,
+          24,
+          29
+        ],
+        [
+          168,
+          168,
+          41,
+          49,
+          34,
+          34
+        ],
+        [
+          211,
+          211,
+          56,
+          56,
+          42,
+          42
+        ],
+        [
+          264,
+          264,
+          71,
+          71,
+          53,
+          53
+        ],
+        [
+          330,
+          330,
+          88,
+          88,
+          66,
+          66
+        ],
+        [
+          413,
+          413,
+          110,
+          110,
+          82,
+          82
+        ],
+        [
+          225,
+          225,
+          64,
+          55,
+          48,
+          42
+        ],
+        [
+          242,
+          208,
+          65,
+          55,
+          48,
+          42
+        ],
+        [
+          200,
+          249,
+          53,
+          67,
+          40,
+          50
         ]
       ]
     }
@@ -47650,6 +48028,247 @@
       }
     ]
   },
+  "heroProgressionStepsMoW": [
+    {
+      "Step": 0,
+      "stars": 0,
+      "rarity": "Common",
+      "maxAbilityLevel": 8,
+      "abilityStatMultiplierPct": 100,
+      "abilityPowerMultiplier": 7,
+      "costs": {
+        "shards": 40
+      }
+    },
+    {
+      "Step": 1,
+      "stars": 1,
+      "rarity": "Common",
+      "maxAbilityLevel": 8,
+      "abilityStatMultiplierPct": 105,
+      "abilityPowerMultiplier": 8,
+      "costs": {
+        "shards": 10
+      }
+    },
+    {
+      "Step": 2,
+      "stars": 2,
+      "rarity": "Common",
+      "maxAbilityLevel": 8,
+      "abilityStatMultiplierPct": 110,
+      "abilityPowerMultiplier": 9,
+      "costs": {
+        "shards": 15
+      }
+    },
+    {
+      "Step": 3,
+      "stars": 2,
+      "rarity": "Uncommon",
+      "maxAbilityLevel": 17,
+      "abilityStatMultiplierPct": 115,
+      "abilityPowerMultiplier": 10,
+      "costs": {
+        "shards": 15,
+        "heroAscensionOrbUncommon": 10
+      }
+    },
+    {
+      "Step": 4,
+      "stars": 3,
+      "rarity": "Uncommon",
+      "maxAbilityLevel": 17,
+      "abilityStatMultiplierPct": 120,
+      "abilityPowerMultiplier": 11,
+      "costs": {
+        "shards": 15
+      }
+    },
+    {
+      "Step": 5,
+      "stars": 4,
+      "rarity": "Uncommon",
+      "maxAbilityLevel": 17,
+      "abilityStatMultiplierPct": 125,
+      "abilityPowerMultiplier": 12,
+      "costs": {
+        "shards": 15
+      }
+    },
+    {
+      "Step": 6,
+      "stars": 4,
+      "rarity": "Rare",
+      "maxAbilityLevel": 26,
+      "abilityStatMultiplierPct": 130,
+      "abilityPowerMultiplier": 13,
+      "costs": {
+        "shards": 20,
+        "heroAscensionOrbRare": 10
+      }
+    },
+    {
+      "Step": 7,
+      "stars": 5,
+      "rarity": "Rare",
+      "maxAbilityLevel": 26,
+      "abilityStatMultiplierPct": 135,
+      "abilityPowerMultiplier": 14,
+      "costs": {
+        "shards": 30
+      }
+    },
+    {
+      "Step": 8,
+      "stars": 6,
+      "rarity": "Rare",
+      "maxAbilityLevel": 26,
+      "abilityStatMultiplierPct": 140,
+      "abilityPowerMultiplier": 15,
+      "costs": {
+        "shards": 40
+      }
+    },
+    {
+      "Step": 9,
+      "stars": 6,
+      "rarity": "Epic",
+      "maxAbilityLevel": 35,
+      "abilityStatMultiplierPct": 145,
+      "abilityPowerMultiplier": 16,
+      "costs": {
+        "shards": 50,
+        "heroAscensionOrbEpic": 10
+      }
+    },
+    {
+      "Step": 10,
+      "stars": 7,
+      "rarity": "Epic",
+      "maxAbilityLevel": 35,
+      "abilityStatMultiplierPct": 150,
+      "abilityPowerMultiplier": 17,
+      "costs": {
+        "shards": 65
+      }
+    },
+    {
+      "Step": 11,
+      "stars": 8,
+      "rarity": "Epic",
+      "maxAbilityLevel": 35,
+      "abilityStatMultiplierPct": 155,
+      "abilityPowerMultiplier": 18,
+      "costs": {
+        "shards": 85
+      }
+    },
+    {
+      "Step": 12,
+      "stars": 8,
+      "rarity": "Legendary",
+      "maxAbilityLevel": 50,
+      "abilityStatMultiplierPct": 160,
+      "abilityPowerMultiplier": 19,
+      "costs": {
+        "shards": 100,
+        "heroAscensionOrbLegendary": 10
+      }
+    },
+    {
+      "Step": 13,
+      "stars": 9,
+      "rarity": "Legendary",
+      "maxAbilityLevel": 50,
+      "abilityStatMultiplierPct": 165,
+      "abilityPowerMultiplier": 21,
+      "costs": {
+        "shards": 150,
+        "heroAscensionOrbLegendary": 10
+      }
+    },
+    {
+      "Step": 14,
+      "stars": 10,
+      "rarity": "Legendary",
+      "maxAbilityLevel": 50,
+      "abilityStatMultiplierPct": 170,
+      "abilityPowerMultiplier": 23,
+      "costs": {
+        "shards": 250,
+        "heroAscensionOrbLegendary": 15
+      }
+    },
+    {
+      "Step": 15,
+      "stars": 11,
+      "rarity": "Legendary",
+      "maxAbilityLevel": 50,
+      "abilityStatMultiplierPct": 180,
+      "abilityPowerMultiplier": 25,
+      "costs": {
+        "shards": 500,
+        "heroAscensionOrbLegendary": 20
+      }
+    },
+    {
+      "Step": 16,
+      "stars": 11,
+      "rarity": "Mythic",
+      "maxAbilityLevel": 60,
+      "abilityStatMultiplierPct": 185,
+      "abilityPowerMultiplier": 26,
+      "mythicAbilityStatMultiplierPct": 100,
+      "mythicAbilityPower": 75000,
+      "costs": {
+        "mythicShards": 20,
+        "heroAscensionOrbMythic": 10
+      }
+    },
+    {
+      "Step": 17,
+      "stars": 12,
+      "rarity": "Mythic",
+      "maxAbilityLevel": 60,
+      "abilityStatMultiplierPct": 190,
+      "abilityPowerMultiplier": 27,
+      "mythicAbilityStatMultiplierPct": 130,
+      "mythicAbilityPower": 100000,
+      "costs": {
+        "mythicShards": 30,
+        "heroAscensionOrbMythic": 10
+      }
+    },
+    {
+      "Step": 18,
+      "stars": 13,
+      "rarity": "Mythic",
+      "maxAbilityLevel": 60,
+      "abilityStatMultiplierPct": 195,
+      "abilityPowerMultiplier": 28,
+      "mythicAbilityStatMultiplierPct": 160,
+      "mythicAbilityPower": 125000,
+      "costs": {
+        "mythicShards": 50,
+        "heroAscensionOrbMythic": 15
+      }
+    },
+    {
+      "Step": 19,
+      "stars": 14,
+      "rarity": "Mythic",
+      "maxAbilityLevel": 60,
+      "abilityStatMultiplierPct": 200,
+      "abilityPowerMultiplier": 29,
+      "mythicAbilityStatMultiplierPct": 200,
+      "mythicAbilityPower": 150000,
+      "costs": {
+        "mythicShards": 100,
+        "heroAscensionOrbMythic": 25
+      }
+    }
+  ],
   "damageProfileModifiers": {
     "Physical": 35,
     "Projectile": 56,
@@ -47942,6 +48561,9 @@
     },
     "SkyStrike": {
       "baseMultiplier": 110
+    },
+    "MultiMelta": {
+      "baseMultiplier": 100
     },
     "PsychicMaelstrom": {
       "baseMultiplier": 80
@@ -48436,6 +49058,24 @@
       "baseMultiplier": 80
     },
     "PowerUp_SummonSpawn_darkaSmnTerminator": {
+      "baseMultiplier": 80
+    },
+    "PowerUp_SummonSpawn_necroSmnWarrior": {
+      "baseMultiplier": 80
+    },
+    "PowerUp_SummonSpawn_necroSmnFlayedOne": {
+      "baseMultiplier": 80
+    },
+    "PowerUp_SummonSpawn_necroSmnDeathmark": {
+      "baseMultiplier": 80
+    },
+    "PowerUp_SummonSpawn_necroSmnDestroyer": {
+      "baseMultiplier": 80
+    },
+    "PowerUp_SummonSpawn_necroSmnSwarm": {
+      "baseMultiplier": 80
+    },
+    "Player_SummonSpawn:astraSmnGuardsman": {
       "baseMultiplier": 80
     },
     "EnvCapturePointShield": {
@@ -49218,6 +49858,9 @@
     "EnvStrategicBuff:Killzone": {
       "baseMultiplier": 100
     },
+    "EnvStrategicBuff:PowerMatrix": {
+      "baseMultiplier": 100
+    },
     "LashOfTorment": {
       "baseMultiplier": 100
     },
@@ -49501,6 +50144,12 @@
       "baseMultiplier": 100
     },
     "IconOfObstinacy": {
+      "baseMultiplier": 100
+    },
+    "TotalObliteration": {
+      "baseMultiplier": 100
+    },
+    "CrucibleOfBattle": {
       "baseMultiplier": 100
     },
     "DeathOnTheWind": {

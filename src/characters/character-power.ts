@@ -1,11 +1,13 @@
-// Ported from a friend's zero-dependency characterPower.mjs (~/Downloads/tacticus-character-power/)
-// - same algorithm and the same defensive runtime validation, just typed. The validation is a
-// feature, not incidental strictness: it loudly throws when the bundled GameConfig data doesn't
-// match the response's unit IDs (e.g. a character added after the last extraction), rather than
-// silently returning a believable-but-wrong power number.
+// Ported from a friend's zero-dependency characterPower.mjs (~/Downloads/character-power/) - same
+// algorithm and the same defensive runtime validation, just typed. The validation is a feature, not
+// incidental strictness: it loudly throws when the bundled GameConfig data doesn't match the
+// response's unit IDs (e.g. a unit added after the last extraction), rather than silently returning
+// a believable-but-wrong power number.
 //
-// Machines of War are deliberately omitted: their progression and tertiary-ability power use a
-// separate model, and the game doesn't treat them as characters.
+// Covers both characters and Machines of War. A character's power comes from the health/damage/armor
+// stat formula plus active/passive ability power and (when equipped) relic ability power. A Machine
+// of War skips the stat formula entirely: its power is its primary, secondary, and - once unlocked -
+// mythic ability power, scaled by the same trait/progression modifiers.
 
 import units from "../assets/character-power-units.json";
 import items from "../assets/character-power-items.json";
@@ -17,14 +19,24 @@ export interface CharacterPower {
   power: number;
 }
 
+export interface UnitPower extends CharacterPower {
+  type: "character" | "machineOfWar";
+}
+
 /**
- * Calculates power using the GameConfig subset bundled at build time (see
- * scripts/extract-character-power-config.ts). Throws under the same conditions as
- * calculateCharacterPowers - most commonly when `response` contains a character added since the
+ * Calculates power for every owned unit (characters and Machines of War) using the GameConfig subset
+ * bundled at build time (see README.md's "Updating character-power data" - the extraction now lives
+ * in datamine_tacticus's extract_all.ts as the character_power job). Throws under the same
+ * conditions as calculateUnitPowers - most commonly when `response` contains a unit added since the
  * bundled data was last extracted.
  */
+export function calculateBundledUnitPowers(response: unknown): UnitPower[] {
+  return calculateUnitPowers(response, { units, items, upgrades });
+}
+
+/** As calculateBundledUnitPowers, but Machines of War are filtered out and `type` is stripped. */
 export function calculateBundledCharacterPowers(response: unknown): CharacterPower[] {
-  return calculateCharacterPowers(response, { units, items, upgrades });
+  return stripMachines(calculateBundledUnitPowers(response));
 }
 
 interface Stats {
@@ -41,25 +53,30 @@ interface Stats {
   blockDamageBonus: number;
 }
 
+interface CharacterStats {
+  stats: Stats;
+  // The level of the equipped relic's granted ability, or null when no relic is equipped.
+  relicAbilityLevel: number | null;
+}
+
 type JsonObject = Record<string, unknown>;
 
 /**
- * Calculates the in-game power of every owned character in a CONNECT response.
+ * Calculates the in-game power of every owned unit in a CONNECT response.
  *
  * `gameConfigDocument` is the parsed contents of GameConfig.json (or just its `clientGameConfig`
- * value). Machines of War are deliberately omitted - see module comment.
+ * value). Results are sorted by descending power, tiebroken by unit ID.
  */
-export function calculateCharacterPowers(response: unknown, gameConfigDocument: unknown): CharacterPower[] {
+export function calculateUnitPowers(response: unknown, gameConfigDocument: unknown): UnitPower[] {
   const hero = findHeroState(response);
   const gameConfig = unwrapGameConfig(gameConfigDocument);
   const unitsConfig = objectAt(gameConfig, "units");
   const lineup = objectAt(unitsConfig, "lineup");
   const playerUnits = objectAt(objectAt(hero, "units"), "units");
-  const playerItemsRoot = objectAt(hero, "items");
-  const playerItems = objectAt(playerItemsRoot, "items");
+  const playerItems = objectAt(objectAt(hero, "items"), "items");
   const itemConfigs = objectAt(gameConfig, "items");
   const upgradeConfigs = objectAt(gameConfig, "upgrades");
-  const result: CharacterPower[] = [];
+  const result: UnitPower[] = [];
 
   const missingUnitIds = Object.keys(playerUnits).filter((unitId) => optionalObject(lineup[unitId]) === null);
   if (missingUnitIds.length > 0) {
@@ -70,21 +87,46 @@ export function calculateCharacterPowers(response: unknown, gameConfigDocument: 
     const progress = requireObject(rawProgress, `units.${unitId}`);
     const unit = requireObject(lineup[unitId], `GameConfig.units.lineup.${unitId}`);
     const traits = stringArray(unit.traits, `${unitId}.traits`);
-    if (traits.includes("MachineOfWar")) {
-      continue;
+    const isMachine = traits.includes("MachineOfWar");
+
+    // Snowprint omits numeric fields whose value is zero.
+    const progressionIndex = integerOrDefault(progress.progressionIndex, 0, `units.${unitId}.progressionIndex`);
+    const progressionStep = getProgressionStep(unitsConfig, unitId, progressionIndex, isMachine);
+
+    let power: number;
+    if (isMachine) {
+      power = calculateMachinePower(unit, progress, progressionStep, unitsConfig);
+    } else {
+      const { stats, relicAbilityLevel } = calculateStats(
+        unitId,
+        unit,
+        progress,
+        progressionStep,
+        playerItems,
+        itemConfigs,
+        upgradeConfigs,
+      );
+      power = calculatePower(unit, progress, progressionStep, stats, relicAbilityLevel, unitsConfig);
     }
 
-    const progressionIndex = integerAt(progress, "progressionIndex", `units.${unitId}`);
-    const progressionStep = getProgressionStep(unitsConfig, unitId, progressionIndex);
-    const stats = calculateStats(unitId, unit, progress, progressionStep, playerItems, itemConfigs, upgradeConfigs);
     result.push({
       unitId,
       name: typeof unit.name === "string" ? unit.name : unitId,
-      power: calculatePower(unit, progress, progressionStep, stats, unitsConfig),
+      power,
+      type: isMachine ? "machineOfWar" : "character",
     });
   }
 
   return result.sort((a, b) => b.power - a.power || a.unitId.localeCompare(b.unitId));
+}
+
+/** As calculateUnitPowers, but Machines of War are filtered out and `type` is stripped. */
+export function calculateCharacterPowers(response: unknown, gameConfigDocument: unknown): CharacterPower[] {
+  return stripMachines(calculateUnitPowers(response, gameConfigDocument));
+}
+
+function stripMachines(powers: UnitPower[]): CharacterPower[] {
+  return powers.filter((unit) => unit.type === "character").map(({ unitId, name, power }) => ({ unitId, name, power }));
 }
 
 function calculateStats(
@@ -95,7 +137,7 @@ function calculateStats(
   playerItems: JsonObject,
   itemConfigs: JsonObject,
   upgradeConfigs: JsonObject,
-): Stats {
+): CharacterStats {
   const base = objectAt(unit, "stats");
   const stats = emptyStats();
   stats.health = numberOrZero(base.Health);
@@ -129,13 +171,19 @@ function calculateStats(
     addUpgrade(stats, upgradeId, increase, upgradeConfigs, unitId);
   }
 
-  const itemStats = calculateItemStats(progress.items, playerItems, itemConfigs, unitId);
+  const { stats: itemStats, relicAbilityLevel } = calculateItemStats(progress.items, playerItems, itemConfigs, unitId);
   mergeStats(stats, itemStats);
-  return stats;
+  return { stats, relicAbilityLevel };
 }
 
-function calculateItemStats(rawEquipped: unknown, playerItems: JsonObject, itemConfigs: JsonObject, unitId: string): Stats {
+function calculateItemStats(
+  rawEquipped: unknown,
+  playerItems: JsonObject,
+  itemConfigs: JsonObject,
+  unitId: string,
+): CharacterStats {
   const result = emptyStats();
+  let relicAbilityLevel: number | null = null;
   const equipped = optionalObject(rawEquipped) ?? {};
   for (const instanceId of Object.values(equipped)) {
     if (typeof instanceId !== "number" && typeof instanceId !== "string") {
@@ -145,6 +193,9 @@ function calculateItemStats(rawEquipped: unknown, playerItems: JsonObject, itemC
     const itemId = stringAt(instance, "itemId", `items.${String(instanceId)}`);
     const level = integerAt(instance, "level", `items.${String(instanceId)}`);
     const item = requireObject(itemConfigs[itemId], `GameConfig.items.${itemId}`);
+    if (typeof item.abilityId === "string" && item.abilityId.length > 0) {
+      relicAbilityLevel = level;
+    }
     if (!Array.isArray(item.levels)) {
       throw new Error(`GameConfig item ${itemId} has no levels`);
     }
@@ -166,10 +217,17 @@ function calculateItemStats(rawEquipped: unknown, playerItems: JsonObject, itemC
   if (result.critDamage > 0) result.critDamage += result.critDamageBonus;
   if (result.blockChance > 0) result.blockChance += result.blockChanceBonus;
   if (result.blockDamage > 0) result.blockDamage += result.blockDamageBonus;
-  return result;
+  return { stats: result, relicAbilityLevel };
 }
 
-function calculatePower(unit: JsonObject, progress: JsonObject, progressionStep: JsonObject, stats: Stats, unitsConfig: JsonObject): number {
+function calculatePower(
+  unit: JsonObject,
+  progress: JsonObject,
+  progressionStep: JsonObject,
+  stats: Stats,
+  relicAbilityLevel: number | null,
+  unitsConfig: JsonObject,
+): number {
   const damageModifiers = objectAt(unitsConfig, "damageProfileModifiers");
   const weapons = arrayOfObjects(unit.weapons, "unit.weapons");
   let squaredWeaponPower = 0;
@@ -189,8 +247,9 @@ function calculatePower(unit: JsonObject, progress: JsonObject, progressionStep:
   const durability = (stats.health + expectedBlock) * (1 + stats.fixedArmor / 2);
   const statsPower = Math.pow(durability * weaponsPower, 2 / 3);
 
-  const activeCurve = numberArrayAt(objectAt(unitsConfig, "abilityPowerCurve"), "active", "units.abilityPowerCurve");
-  const passiveCurve = numberArrayAt(objectAt(unitsConfig, "abilityPowerCurve"), "passive", "units.abilityPowerCurve");
+  const abilityCurves = objectAt(unitsConfig, "abilityPowerCurve");
+  const activeCurve = numberArrayAt(abilityCurves, "active", "units.abilityPowerCurve");
+  const passiveCurve = numberArrayAt(abilityCurves, "passive", "units.abilityPowerCurve");
   const abilityModifiers = objectAt(unitsConfig, "abilityPowerModifiers");
   const activeId = stringArray(unit.activeAbilities, "unit.activeAbilities")[0];
   const passiveId = stringArray(unit.passiveAbilities, "unit.passiveAbilities")[0];
@@ -203,20 +262,63 @@ function calculatePower(unit: JsonObject, progress: JsonObject, progressionStep:
   const passivePower = abilityPower(passiveId, passiveLevel, passiveCurve, abilityModifiers);
   const abilityMultiplier = integerAt(progressionStep, "abilityPowerMultiplier", "unit.progressionStep");
   const abilitiesPower = (activePower + passivePower) * abilityMultiplier;
+  const relicPower =
+    relicAbilityLevel === null
+      ? 0
+      : abilityCurvePower(relicAbilityLevel, numberArrayAt(abilityCurves, "relic", "units.abilityPowerCurve"), "unit.relicAbility");
 
+  const traitMultiplier = calculateTraitMultiplier(unit, unitsConfig);
+  const movement = numberAt(unit, "Movement", "unit");
+  const unitPowerMultiplier = typeof unit.powerMultiplier === "number" ? unit.powerMultiplier : 100;
+  const rawPower =
+    (10 + traitMultiplier * ((statsPower * Math.sqrt(movement)) / 100 + abilitiesPower + relicPower)) *
+    (unitPowerMultiplier / 100);
+  return Math.round(rawPower);
+}
+
+function calculateMachinePower(
+  unit: JsonObject,
+  progress: JsonObject,
+  progressionStep: JsonObject,
+  unitsConfig: JsonObject,
+): number {
+  const abilityIds = stringArray(unit.activeAbilities, "machineOfWar.activeAbilities");
+  const primaryId = abilityIds[0];
+  const secondaryId = abilityIds[1];
+  if (!primaryId || !secondaryId) {
+    throw new Error("Machine of War must have a primary and secondary ability");
+  }
+
+  const abilityCurves = objectAt(unitsConfig, "abilityPowerCurve");
+  const primaryCurve = numberArrayAt(abilityCurves, "active", "units.abilityPowerCurve");
+  const secondaryCurve = numberArrayAt(abilityCurves, "passive", "units.abilityPowerCurve");
+  const abilityModifiers = objectAt(unitsConfig, "abilityPowerModifiers");
+  const primaryLevel = integerAt(progress, "active", "machineOfWar.progress");
+  const secondaryLevel = integerAt(progress, "passive", "machineOfWar.progress");
+  const primaryPower = abilityPower(primaryId, primaryLevel, primaryCurve, abilityModifiers);
+  const secondaryPower = abilityPower(secondaryId, secondaryLevel, secondaryCurve, abilityModifiers);
+
+  const abilityMultiplier = integerAt(progressionStep, "abilityPowerMultiplier", "machineOfWar.progressionStep");
+  const mythicPower = numberOrZero(progressionStep.mythicAbilityPower);
+
+  const traitMultiplier = calculateTraitMultiplier(unit, unitsConfig);
+  const unitPowerMultiplier = typeof unit.powerMultiplier === "number" ? unit.powerMultiplier : 100;
+  const rawPower =
+    (10 + traitMultiplier * ((primaryPower + secondaryPower) * abilityMultiplier + mythicPower)) *
+    (unitPowerMultiplier / 100);
+  return Math.round(rawPower);
+}
+
+function calculateTraitMultiplier(unit: JsonObject, unitsConfig: JsonObject): number {
   const traitModifiers = objectAt(unitsConfig, "traitPowerModifiers");
-  let traitMultiplier = 1;
+  let multiplier = 1;
   for (const trait of stringArray(unit.traits, "unit.traits")) {
     const modifier = traitModifiers[trait];
     if (typeof modifier === "number") {
-      traitMultiplier *= modifier / 100;
+      multiplier *= modifier / 100;
     }
   }
-
-  const movement = numberAt(unit, "Movement", "unit");
-  const unitPowerMultiplier = typeof unit.powerMultiplier === "number" ? unit.powerMultiplier : 100;
-  const rawPower = (10 + traitMultiplier * ((statsPower * Math.sqrt(movement)) / 100 + abilitiesPower)) * (unitPowerMultiplier / 100);
-  return Math.round(rawPower);
+  return multiplier;
 }
 
 function abilityPower(abilityId: string, level: number, curve: number[], modifiers: JsonObject): number {
@@ -229,7 +331,29 @@ function abilityPower(abilityId: string, level: number, curve: number[], modifie
   return base * (modifier ? numberOrDefault(modifier.baseMultiplier, 100) / 100 : 1);
 }
 
-function getProgressionStep(unitsConfig: JsonObject, unitId: string, progressionIndex: number): JsonObject {
+function abilityCurvePower(level: number, curve: number[], field: string): number {
+  if (level < 1) return 0;
+  const base = curve[level - 1];
+  if (base === undefined || !Number.isFinite(base)) {
+    throw new Error(`${field} level ${level} is outside the power curve`);
+  }
+  return base;
+}
+
+function getProgressionStep(
+  unitsConfig: JsonObject,
+  unitId: string,
+  progressionIndex: number,
+  isMachine: boolean,
+): JsonObject {
+  if (isMachine) {
+    const steps = unitsConfig.heroProgressionStepsMoW;
+    if (!Array.isArray(steps)) {
+      throw new Error(`GameConfig has no Machine of War progression steps for ${unitId}`);
+    }
+    return requireObject(steps[progressionIndex], `${unitId}.machineProgressionStep`);
+  }
+
   const perUnit = objectAt(unitsConfig, "heroProgressionStepsPerUnit");
   const defaults = (perUnit.default as unknown) ?? unitsConfig.heroProgressionSteps;
   if (!Array.isArray(defaults)) {

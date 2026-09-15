@@ -15,6 +15,7 @@ export interface MowRow {
   starIconUrls: string[];
   activeLevel?: number;
   passiveLevel?: number;
+  power?: number;
 }
 
 function asNumber(value: unknown): number | undefined {
@@ -37,5 +38,6 @@ export function getMowRow(mow: RawUnit): MowRow {
     starIconUrls: starIconUrls(ProgressionIndexMapper.toStars(progressionIndex)),
     activeLevel: asNumber(mow.active),
     passiveLevel: asNumber(mow.passive),
+    power: mow.power,
   };
 }

@@ -10,6 +10,8 @@ export function MowTable({ machinesOfWar }: { machinesOfWar: RawUnit[] }) {
     return <p>No machines of war found.</p>;
   }
 
+  const sortedMachinesOfWar = [...machinesOfWar].sort((a, b) => (b.power ?? -Infinity) - (a.power ?? -Infinity));
+
   return (
     <table className="mt-4 w-full table-auto border-collapse text-left">
       <thead>
@@ -21,10 +23,11 @@ export function MowTable({ machinesOfWar }: { machinesOfWar: RawUnit[] }) {
           <th className={cellClass}>Stars</th>
           <th className={cellClass}>Active</th>
           <th className={cellClass}>Passive</th>
+          <th className={cellClass}>Power</th>
         </tr>
       </thead>
       <tbody>
-        {machinesOfWar.map((mow) => {
+        {sortedMachinesOfWar.map((mow) => {
           const row = getMowRow(mow);
           return (
             <tr key={row.id}>
@@ -45,6 +48,7 @@ export function MowTable({ machinesOfWar }: { machinesOfWar: RawUnit[] }) {
               </td>
               <td className={cellClass}>{row.activeLevel}</td>
               <td className={cellClass}>{row.passiveLevel}</td>
+              <td className={cellClass}>{row.power?.toLocaleString() ?? "unknown"}</td>
             </tr>
           );
         })}
