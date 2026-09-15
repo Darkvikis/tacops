@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import {
   findCredentials,
@@ -25,6 +32,9 @@ import {
 } from "../guild/guild-events";
 
 const ALL_CHANNELS: ChannelName[] = ["guild", "guildchat"];
+
+/** Scrolling within this much of the top of the list asks for the previous page of history. */
+const LOAD_OLDER_AT_PX = 120;
 
 // Presentational maps — the view-model carries a tone and a colour bucket; the classes live here.
 const TONE_CLASSES: Record<EventTone, string> = {
@@ -84,6 +94,10 @@ export function GuildChatTab({ environment }: GuildChatTabProps) {
   const credentialsRef = useRef<Awaited<
     ReturnType<typeof findCredentials>
   > | null>(null);
+  const listRef = useRef<HTMLDivElement>(null);
+  const listHeightRef = useRef<number | null>(null);
+  // Scrolling can ask for older history faster than React re-renders, so the guard is a ref.
+  const loadingRef = useRef(false);
 
   useEffect(() => {
     setFeed(null);
@@ -93,6 +107,7 @@ export function GuildChatTab({ environment }: GuildChatTabProps) {
   }, [environment]);
 
   async function load() {
+    loadingRef.current = true;
     setLoading(true);
     setStatus("Reading local credentials…");
     try {
@@ -110,12 +125,14 @@ export function GuildChatTab({ environment }: GuildChatTabProps) {
     } catch (error) {
       setStatus(`Failed: ${error}`);
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
   }
 
   async function loadOlder() {
-    if (!feed || !credentialsRef.current) return;
+    if (!feed || !credentialsRef.current || loadingRef.current) return;
+    loadingRef.current = true;
     setLoading(true);
     try {
       const updated = await loadOlderEvents(
@@ -129,11 +146,15 @@ export function GuildChatTab({ environment }: GuildChatTabProps) {
     } catch (error) {
       setStatus(`Failed: ${error}`);
     } finally {
+      loadingRef.current = false;
       setLoading(false);
     }
   }
 
+  // Each window is a socket round trip, so the feed is rendered as it arrives rather than at the
+  // end of the load — the newest events are on screen while the older ones are still being read.
   function reportProgress(progress: LoadProgress) {
+    setFeed(progress.feed);
     setStatus(`Reading guild history… ${progress.collected} events`);
   }
 
@@ -161,6 +182,33 @@ export function GuildChatTab({ environment }: GuildChatTabProps) {
       }));
     }
   }
+
+  // Reaching the top of the list is the "load older" gesture; the button below is the fallback.
+  function onListScroll(event: UIEvent<HTMLDivElement>) {
+    if (event.currentTarget.scrollTop > LOAD_OLDER_AT_PX) return;
+    if (!feed || feed.exhausted) return;
+    void loadOlder();
+  }
+
+  // The list reads like a chat window: oldest at the top, newest at the bottom. So it opens at the
+  // bottom, and a load — which only ever adds events ABOVE what's shown — scrolls down by however
+  // much the list grew, leaving the events being read exactly where they were.
+  useLayoutEffect(() => {
+    const list = listRef.current;
+    if (!list) {
+      listHeightRef.current = null;
+      return;
+    }
+    const previousHeight = listHeightRef.current;
+    listHeightRef.current = list.scrollHeight;
+    if (previousHeight == null) {
+      list.scrollTop = list.scrollHeight;
+      return;
+    }
+    if (!loading) return;
+    const growth = list.scrollHeight - previousHeight;
+    if (growth > 0) list.scrollTop += growth;
+  });
 
   const counts = useMemo(() => categoryCounts(feed), [feed]);
   const items = useMemo(() => buildItems(feed, active), [feed, active]);
@@ -216,7 +264,23 @@ export function GuildChatTab({ environment }: GuildChatTabProps) {
             than for others, so chat won't scroll back as far as guild events.
           </p>
 
+          <div className="flex justify-center pb-1">
+            <button
+              type="button"
+              onClick={loadOlder}
+              disabled={loading || feed.exhausted}
+              className={GLOW_BUTTON}
+            >
+              {feed.exhausted
+                ? "No older history"
+                : loading
+                  ? "Loading…"
+                  : "Load older messages"}
+            </button>
+          </div>
           <div
+            ref={listRef}
+            onScroll={onListScroll}
             className={`${GLOW_CARD} flex max-h-[65vh] flex-col overflow-y-auto p-3`}
           >
             <GlowOrb />
@@ -250,20 +314,6 @@ export function GuildChatTab({ environment }: GuildChatTabProps) {
             )}
           </div>
 
-          <div className="flex justify-center pb-2">
-            <button
-              type="button"
-              onClick={loadOlder}
-              disabled={loading || feed.exhausted}
-              className={GLOW_BUTTON}
-            >
-              {feed.exhausted
-                ? "No older history"
-                : loading
-                  ? "Loading…"
-                  : "Load older messages"}
-            </button>
-          </div>
         </>
       )}
     </div>
@@ -493,27 +543,25 @@ function buildItems(
     active.size === 0
       ? feed.events
       : feed.events.filter((event) => active.has(eventCategory(event)));
-  // Newest first so paging older simply appends to the bottom — no scroll anchoring needed.
-  const rows = events.slice().reverse().map(guildEventToRow);
+  // Oldest first, newest at the bottom, the way a chat window reads. Paging older prepends above,
+  // which the list's scroll anchoring absorbs.
+  const rows = events.map(guildEventToRow);
 
-  // Once chat history is exhausted, mark where it ends: after the oldest visible guildchat row,
-  // below which only older guild events remain.
-  const lastChatIndex = feed.chatExhausted ? lastIndexOfChat(rows) : -1;
+  // Once chat history is exhausted, mark where it starts: above the oldest visible guildchat row,
+  // beyond which only older guild events remain.
+  const firstChatIndex = feed.chatExhausted ? firstIndexOfChat(rows) : -1;
   const items: FeedItem[] = [];
   rows.forEach((row, index) => {
-    items.push({ kind: "event", row });
-    if (index === lastChatIndex) {
+    if (index === firstChatIndex) {
       items.push({ kind: "chat-end" });
     }
+    items.push({ kind: "event", row });
   });
   return items;
 }
 
-function lastIndexOfChat(rows: GuildEventRow[]): number {
-  for (let index = rows.length - 1; index >= 0; index -= 1) {
-    if (rows[index].channel === "guildchat") return index;
-  }
-  return -1;
+function firstIndexOfChat(rows: GuildEventRow[]): number {
+  return rows.findIndex((row) => row.channel === "guildchat");
 }
 
 function feedStatus(feed: GuildFeed): string {

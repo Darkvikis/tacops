@@ -9,45 +9,57 @@ import {
 
 /**
  * Scrollback over a guild's two channels, `guild` (guild events) and `guildchat` (chat + shared
- * replays). They are independent seq spaces that the server answers with DIFFERENT window mechanics:
+ * replays). They are independent seq spaces, and the server has no history API: the only way to read
+ * old events is to subscribe the realtime socket at a seq and take the window it replays.
  *
- *   - guildchat: a fixed ~220-event slice starting ~1710 seqs ABOVE the requested seq. To reach the
- *     newest events you request near `top - 1930`; older pages come from decreasing the seq.
- *   - guild: forward pages — a request at S returns the events just after S up to the newest (a big
- *     window, capped ~1250). A SMALL margin below `top` reaches the newest; a large one caps short.
+ * That window is a stable function of the seq asked for: a request at S is answered with
+ * `[S + offset, S + offset + width - 1]`, CLAMPED to the channel's newest event and to the oldest it
+ * still retains. Both the offset and the width are per-channel and not documented anywhere — measured
+ * against the live service (Sep 2026) `guild` answers with the ~1500 events straight after S, while
+ * `guildchat` answers with a 220-event window starting ~1710 seqs ABOVE S. So requests within ~1930
+ * seqs of the chat head all clamp to the same newest window, and a reader that steps its request down
+ * blindly looks "stuck" for nine steps before it starts moving.
  *
- * Because the mechanics and densities differ, each channel is set up by a "reach the top" discovery
- * that finds a starting seq whose window includes the newest events, whichever mechanic applies.
- * History is then read by probing overlapping windows at decreasing seqs and merging by (channel,
- * seq). To keep the merged feed consistent as the user pages back, the `guild` channel anchors each
- * step and `guildchat` is read back to the same timestamp — so every "load older" only adds events
- * OLDER than what's shown. When guildchat runs out of retained history first (a read stops adding
- * anything new), it's marked exhausted so the UI can show where chat history ends.
+ * Rather than hard-code either number, each channel measures its own offset once (probe downward
+ * until the window moves below the head window, then offset = window start - seq asked) and pages in
+ * WINDOW space after that: aim the next window to end just above the oldest contiguous seq held, and
+ * convert back to a request seq through the offset. The width is re-measured from every window, so a
+ * channel that serves narrower windows near its retention floor simply takes smaller steps.
+ *
+ * History is merged by (channel, seq) and each channel tracks the oldest seq it holds with no gap
+ * below it. To keep the merged feed consistent as the user pages back, the `guild` channel anchors
+ * each step and `guildchat` is read back to the same timestamp — so every "load older" only adds
+ * events OLDER than what's shown. When guildchat runs out of retained history first, it's marked
+ * exhausted so the UI can show where chat history ends.
+ *
+ * Every window takes a socket round trip, so a load is published as it goes rather than at the end:
+ * `onProgress` carries the feed as it stands after each window, and the view can render the first
+ * one (a couple of seconds in) while the rest is still arriving.
  */
 
-/** Seqs advanced per probe: below the guildchat window width (~220) so consecutive windows overlap. */
-const STEP = 200;
+/** Seqs a new window keeps in common with the one above it, so a varying width can't open a gap. */
+const WINDOW_OVERLAP = 20;
+/** Margin below the newest seq used to ask for the head window; the server clamps it to the head. */
+const HEAD_MARGIN = 250;
+/** How far below the head to probe when measuring a channel's offset, until a window moves below it. */
+const PROBE_DELTAS = [500, 1000, 2000, 4000, 8000];
 /** Guild events to add per "load older" — the step that sets the timestamp guildchat aligns to. */
-const GUILD_BATCH = 150;
-/** Small initial margin below the newest seq: reaches the top for guild; discovery widens it for guildchat. */
-const INITIAL_MARGIN = 250;
-/** Extra seqs to drop when the initial margin lands above the top (a channel with a large offset). */
-const LOWER_STEP = 1000;
-/** A window whose newest seq is within this of `top` counts as reaching the newest events. */
-const REACH_SLACK = 60;
-/** Max probes while discovering a channel's newest window. */
-const MAX_DISCOVERY = 12;
-/** Consecutive empty windows before a channel is treated as out of retained history. */
-const EMPTY_STREAK_DONE = 5;
-/** Consecutive windows that add nothing new before a (forward-paging) channel is treated as exhausted. */
-const NO_NEW_DONE = 2;
+const GUILD_BATCH = 1000;
+/** Chat events to add per "load older" once guild history is exhausted and there's no anchor left. */
+const CHAT_BATCH = 400;
+/** Consecutive windows that reach nothing older before a channel is treated as out of history. */
+const STALLED_DONE = 2;
 /** Safety cap on windows read in a single channel walk. */
 const MAX_WINDOWS = 24;
 
 interface ChannelCursor {
   channel: ChannelName;
-  /** The next seq to probe (walking downward). */
-  nextSeq: number;
+  /** Seqs the server adds to a requested seq before the window it serves begins. */
+  offset: number;
+  /** Events in the last window served — the stride of the next step back. */
+  width: number;
+  /** Oldest seq held with no gap below it; the next window is aimed to end just above it. */
+  oldest: number;
   done: boolean;
 }
 
@@ -68,8 +80,25 @@ export interface GuildFeed {
 }
 
 export interface LoadProgress {
+  /** Events added by the load so far. */
   collected: number;
+  /** The feed as it stands, ready to render while the rest of the load is still running. */
+  feed: GuildFeed;
 }
+
+/** The guild a read is against, and everything a walk needs to read and publish windows. */
+interface FeedContext {
+  environment: Environment;
+  credentials: Credentials;
+  guild: GuildInfo;
+  channels: ChannelName[];
+  merged: Map<string, RawChannelEvent>;
+  cursors: Map<ChannelName, ChannelCursor>;
+  /** Publishes the feed as it stands; called after every window. */
+  report: () => void;
+}
+
+type GuildInfo = Pick<GuildFeedInit, "guildId" | "guildName" | "guildTag">;
 
 export async function initGuildFeed(
   environment: Environment,
@@ -79,26 +108,23 @@ export async function initGuildFeed(
   onProgress?: (progress: LoadProgress) => void,
 ): Promise<GuildFeed> {
   const info = await guildFeedInit(environment, credentials, guildId);
-  const merged = new Map<string, RawChannelEvent>();
-  const report = () => onProgress?.({ collected: merged.size });
-
-  const cursors = await Promise.all(
+  const context = createContext(
+    environment,
+    credentials,
+    info,
+    channels,
+    [],
+    null,
+    onProgress,
+  );
+  await Promise.all(
     channels.map((channel) =>
-      discoverNewest(
-        environment,
-        credentials,
-        info.guildId,
-        channel,
-        info.seqs[channel],
-        merged,
-        report,
-      ),
+      discoverChannel(context, channel, info.seqs[channel]),
     ),
   );
-
-  const feed = toFeed(info, channels, cursors, merged);
   // One aligned step so the first view already has both channels back to a common time.
-  return collectOlder(environment, credentials, feed, onProgress);
+  await collectOlder(context);
+  return snapshot(context);
 }
 
 export async function loadOlderEvents(
@@ -107,246 +133,255 @@ export async function loadOlderEvents(
   feed: GuildFeed,
   onProgress?: (progress: LoadProgress) => void,
 ): Promise<GuildFeed> {
-  return collectOlder(environment, credentials, feed, onProgress);
+  const context = createContext(
+    environment,
+    credentials,
+    feed,
+    feed.channels,
+    feed.events,
+    feed.cursors,
+    onProgress,
+  );
+  await collectOlder(context);
+  return snapshot(context);
 }
 
 /**
- * Finds a starting window that includes a channel's newest events, whatever window mechanic the
- * channel uses. It starts a small margin below `top`; if that lands above the newest event (an empty
- * window, i.e. a large-offset channel like guildchat) it drops lower, and if it lands below the
- * newest it nudges the request up until the window's newest seq reaches `top`. Adds the found window
- * to `merged` and returns a cursor to continue below it.
+ * A load's working state. Channels that haven't been discovered yet start on a placeholder cursor
+ * that reports as "not exhausted", so a feed published mid-discovery doesn't briefly claim a channel
+ * has run out of history.
  */
-async function discoverNewest(
+function createContext(
   environment: Environment,
   credentials: Credentials,
-  guildId: string,
+  guild: GuildInfo,
+  channels: ChannelName[],
+  events: RawChannelEvent[],
+  cursors: ChannelCursor[] | null,
+  onProgress?: (progress: LoadProgress) => void,
+): FeedContext {
+  const merged = new Map(events.map((event) => [eventKey(event), event]));
+  const startingSize = merged.size;
+  const context: FeedContext = {
+    environment,
+    credentials,
+    guild,
+    channels,
+    merged,
+    cursors: new Map(
+      (cursors ?? channels.map(undiscovered)).map((cursor) => [
+        cursor.channel,
+        cursor,
+      ]),
+    ),
+    report: () =>
+      onProgress?.({
+        collected: merged.size - startingSize,
+        feed: snapshot(context),
+      }),
+  };
+  return context;
+}
+
+function readWindow(
+  context: FeedContext,
+  channel: ChannelName,
+  seq: number,
+): Promise<RawChannelEvent[]> {
+  return readChannelWindow(
+    context.environment,
+    context.credentials,
+    context.guild.guildId,
+    channel,
+    seq,
+  );
+}
+
+/**
+ * Sets a channel up for paging: reads the window at the head — publishing it, so the newest events
+ * are on screen while the rest of the load runs — then measures the channel's offset by probing
+ * further and further below it until a window comes back that starts below the head window. Requests
+ * inside the offset all clamp to the head window, so the probe is the only way to tell how far a
+ * request has to drop before it moves. The probe's own events are deliberately NOT merged — the jump
+ * can land below a gap, which the walk fills on the way down.
+ */
+async function discoverChannel(
+  context: FeedContext,
   channel: ChannelName,
   top: number | null,
-  merged: Map<string, RawChannelEvent>,
-  report: () => void,
-): Promise<ChannelCursor> {
+): Promise<void> {
   if (top == null) {
-    return { channel, nextSeq: 0, done: true };
+    return settle(context, exhausted(channel));
   }
 
-  let seq = Math.max(top - INITIAL_MARGIN, 0);
-  let best: { seq: number; window: RawChannelEvent[]; max: number } | null =
-    null;
+  const headSeq = Math.max(top - HEAD_MARGIN, 0);
+  const head = await readWindow(context, channel, headSeq);
+  if (head.length === 0) {
+    return settle(context, exhausted(channel));
+  }
+  addAll(context.merged, head);
+  const headOldest = minSeq(head);
+  context.report();
 
-  for (let attempt = 0; attempt < MAX_DISCOVERY; attempt += 1) {
-    const window = await readChannelWindow(
-      environment,
-      credentials,
-      guildId,
-      channel,
-      seq,
-    );
-    report();
-    if (window.length === 0) {
-      if (seq <= 0) break;
-      seq = Math.max(seq - LOWER_STEP, 0);
-      continue;
+  for (const delta of PROBE_DELTAS) {
+    const seq = Math.max(headSeq - delta, 0);
+    const window = await readWindow(context, channel, seq);
+    context.report();
+    if (window.length > 0 && minSeq(window) < headOldest) {
+      return settle(context, {
+        channel,
+        offset: minSeq(window) - seq,
+        width: span(window),
+        oldest: headOldest,
+        done: false,
+      });
     }
-    const max = maxSeq(window);
-    if (best == null || max > best.max) best = { seq, window, max };
-    if (max >= top - REACH_SLACK) break;
-    const next = Math.min(seq + (top - max), top - 1);
-    if (next <= seq) break;
-    seq = next;
-  }
-
-  if (best == null) {
-    return { channel, nextSeq: 0, done: true };
-  }
-  addAll(merged, best.window);
-  return { channel, nextSeq: Math.max(best.seq - STEP, 0), done: false };
-}
-
-async function collectOlder(
-  environment: Environment,
-  credentials: Credentials,
-  feed: GuildFeed,
-  onProgress?: (progress: LoadProgress) => void,
-): Promise<GuildFeed> {
-  const merged = new Map(feed.events.map((event) => [eventKey(event), event]));
-  const startingSize = merged.size;
-  const report = () => onProgress?.({ collected: merged.size - startingSize });
-  const cursors = new Map(
-    feed.cursors.map((cursor) => [cursor.channel, cursor]),
-  );
-
-  const guild = cursors.get("guild");
-  const chat = cursors.get("guildchat");
-
-  if (guild && !guild.done) {
-    // Guild anchors the step; guildchat then catches up to guild's new oldest timestamp.
-    cursors.set(
-      "guild",
-      await walkByCount(
-        environment,
-        credentials,
-        feed.guildId,
-        guild,
-        merged,
-        GUILD_BATCH,
-        report,
-      ),
-    );
-    const targetTimestamp = oldestTimestamp(merged, "guild");
-    if (chat && !chat.done && targetTimestamp != null) {
-      cursors.set(
-        "guildchat",
-        await walkToTimestamp(
-          environment,
-          credentials,
-          feed.guildId,
-          chat,
-          merged,
-          targetTimestamp,
-          report,
-        ),
-      );
-    }
-  } else if (chat && !chat.done) {
-    // Guild history is exhausted, so there's no anchor left — let guildchat page on its own.
-    cursors.set(
-      "guildchat",
-      await walkByCount(
-        environment,
-        credentials,
-        feed.guildId,
-        chat,
-        merged,
-        GUILD_BATCH,
-        report,
-      ),
-    );
-  }
-
-  return toFeed(feed, feed.channels, [...cursors.values()], merged);
-}
-
-/** Reads windows downward until `target` new events have been added (or the channel is exhausted). */
-async function walkByCount(
-  environment: Environment,
-  credentials: Credentials,
-  guildId: string,
-  cursor: ChannelCursor,
-  merged: Map<string, RawChannelEvent>,
-  target: number,
-  report: () => void,
-): Promise<ChannelCursor> {
-  let added = 0;
-  return walkDown(
-    environment,
-    credentials,
-    guildId,
-    cursor,
-    merged,
-    report,
-    (addedThisWindow) => {
-      added += addedThisWindow;
-      return added < target;
-    },
-  );
-}
-
-/** Reads windows downward until the channel's oldest loaded event is at/older than `targetTimestamp`. */
-async function walkToTimestamp(
-  environment: Environment,
-  credentials: Credentials,
-  guildId: string,
-  cursor: ChannelCursor,
-  merged: Map<string, RawChannelEvent>,
-  targetTimestamp: number,
-  report: () => void,
-): Promise<ChannelCursor> {
-  return walkDown(
-    environment,
-    credentials,
-    guildId,
-    cursor,
-    merged,
-    report,
-    () => {
-      const oldest = oldestTimestamp(merged, cursor.channel);
-      return oldest == null || oldest > targetTimestamp;
-    },
-  );
-}
-
-/**
- * Shared downward walk: reads overlapping windows at decreasing seqs, merging events, until
- * `keepGoing(addedThisWindow)` returns false or the channel runs out. A channel is exhausted when a
- * run of windows comes back empty (guildchat's end) or stops adding anything new (guild's end).
- */
-async function walkDown(
-  environment: Environment,
-  credentials: Credentials,
-  guildId: string,
-  cursor: ChannelCursor,
-  merged: Map<string, RawChannelEvent>,
-  report: () => void,
-  keepGoing: (addedThisWindow: number) => boolean,
-): Promise<ChannelCursor> {
-  if (cursor.done) {
-    return cursor;
-  }
-  let seq = cursor.nextSeq;
-  let emptyStreak = 0;
-  let noNewStreak = 0;
-  for (
-    let iterations = 0;
-    seq >= 0 && iterations < MAX_WINDOWS;
-    iterations += 1
-  ) {
-    const window = await readChannelWindow(
-      environment,
-      credentials,
-      guildId,
-      cursor.channel,
-      seq,
-    );
-    let added = 0;
-    for (const event of window) {
-      const key = eventKey(event);
-      if (!merged.has(key)) added += 1;
-      merged.set(key, event);
-    }
-    emptyStreak = window.length === 0 ? emptyStreak + 1 : 0;
-    noNewStreak = window.length > 0 && added === 0 ? noNewStreak + 1 : 0;
-    report();
-    seq -= STEP;
-    if (emptyStreak >= EMPTY_STREAK_DONE || noNewStreak >= NO_NEW_DONE) {
-      return { channel: cursor.channel, nextSeq: Math.max(seq, 0), done: true };
-    }
-    if (added > 0 && !keepGoing(added)) {
+    if (seq === 0) {
       break;
     }
   }
-  return { channel: cursor.channel, nextSeq: Math.max(seq, 0), done: seq < 0 };
+  // Nothing below the head window: this is all the history the server still has.
+  return settle(context, { ...exhausted(channel), oldest: headOldest });
 }
 
-function toFeed(
-  info: Pick<GuildFeedInit, "guildId" | "guildName" | "guildTag"> &
-    Partial<GuildFeed>,
-  channels: ChannelName[],
-  cursors: ChannelCursor[],
-  merged: Map<string, RawChannelEvent>,
-): GuildFeed {
+async function collectOlder(context: FeedContext): Promise<void> {
+  const guild = context.cursors.get("guild");
+  const chat = context.cursors.get("guildchat");
+
+  if (guild && !guild.done) {
+    // Guild anchors the step; guildchat then catches up to guild's new oldest timestamp.
+    await walkByCount(context, guild, GUILD_BATCH);
+    const targetTimestamp = oldestTimestamp(context.merged, "guild");
+    if (chat && !chat.done && targetTimestamp != null) {
+      await walkToTimestamp(context, chat, targetTimestamp);
+    }
+  } else if (chat && !chat.done) {
+    // Guild history is exhausted, so there's no anchor left — let guildchat page on its own.
+    await walkByCount(context, chat, CHAT_BATCH);
+  }
+}
+
+/** Reads windows downward until `target` new events have been added (or the channel is exhausted). */
+function walkByCount(
+  context: FeedContext,
+  cursor: ChannelCursor,
+  target: number,
+): Promise<void> {
+  let added = 0;
+  return walkDown(context, cursor, (addedThisWindow) => {
+    added += addedThisWindow;
+    return added < target;
+  });
+}
+
+/** Reads windows downward until the channel's oldest loaded event is at/older than `targetTimestamp`. */
+function walkToTimestamp(
+  context: FeedContext,
+  cursor: ChannelCursor,
+  targetTimestamp: number,
+): Promise<void> {
+  return walkDown(context, cursor, () => {
+    const oldest = oldestTimestamp(context.merged, cursor.channel);
+    return oldest == null || oldest > targetTimestamp;
+  });
+}
+
+/**
+ * Shared downward walk. Each step aims the next window to end `WINDOW_OVERLAP` seqs inside the oldest
+ * contiguous seq held, converts that to a request seq through the channel's offset, and merges what
+ * comes back. Three outcomes:
+ *
+ *   - the window reaches below the watermark: progress, keep going;
+ *   - the window comes back entirely above the watermark (a hole — the server served a narrower
+ *     window than the last one did): re-measured width moves the next aim up, so retry;
+ *   - the window repeats what's already held: the retention floor, so the channel is done.
+ *
+ * The cursor is committed and the feed published after every window, so a long walk shows its
+ * progress rather than landing all at once.
+ */
+async function walkDown(
+  context: FeedContext,
+  cursor: ChannelCursor,
+  keepGoing: (addedThisWindow: number) => boolean,
+): Promise<void> {
+  if (cursor.done) {
+    return;
+  }
+  let current = cursor;
+  let stalled = 0;
+  for (let windows = 0; windows < MAX_WINDOWS; windows += 1) {
+    const start = current.oldest - 1 + WINDOW_OVERLAP - (current.width - 1);
+    const seq = Math.max(start - current.offset, 0);
+    const window = await readWindow(context, current.channel, seq);
+    let added = 0;
+    for (const event of window) {
+      const key = eventKey(event);
+      if (!context.merged.has(key)) added += 1;
+      context.merged.set(key, event);
+    }
+    if (window.length > 0) {
+      current = { ...current, width: span(window) };
+    }
+
+    const watermark = contiguousOldest(
+      context.merged,
+      current.channel,
+      current.oldest,
+    );
+    if (watermark < current.oldest) {
+      current = { ...current, oldest: watermark };
+      settle(context, current);
+      stalled = 0;
+      if (!keepGoing(added)) {
+        return;
+      }
+      continue;
+    }
+    // A hole above the window means the aim overshot; the re-measured width pulls it back up, so let
+    // that retry run without counting against the stall budget.
+    const hole = window.length > 0 && maxSeq(window) < current.oldest - 1;
+    if (hole && windows + 1 < MAX_WINDOWS) {
+      settle(context, current);
+      continue;
+    }
+    stalled += 1;
+    if (stalled >= STALLED_DONE || seq === 0) {
+      return settle(context, { ...current, done: true });
+    }
+    settle(context, current);
+  }
+  settle(context, current);
+}
+
+/** Commits a channel's cursor and publishes the feed as it now stands. */
+function settle(context: FeedContext, cursor: ChannelCursor): void {
+  context.cursors.set(cursor.channel, cursor);
+  context.report();
+}
+
+function snapshot(context: FeedContext): GuildFeed {
+  const cursors = [...context.cursors.values()];
   return {
-    guildId: info.guildId,
-    guildName: info.guildName,
-    guildTag: info.guildTag,
-    channels,
+    guildId: context.guild.guildId,
+    guildName: context.guild.guildName,
+    guildTag: context.guild.guildTag,
+    channels: context.channels,
     cursors,
-    events: [...merged.values()].sort(byTimestamp),
+    events: [...context.merged.values()].sort(byTimestamp),
     exhausted: cursors.every((cursor) => cursor.done),
     chatExhausted:
       cursors.find((cursor) => cursor.channel === "guildchat")?.done ?? true,
-    chatOldestTimestamp: oldestTimestamp(merged, "guildchat"),
+    chatOldestTimestamp: oldestTimestamp(context.merged, "guildchat"),
   };
+}
+
+/** A channel that hasn't been read yet: nothing held, and nothing yet known to be exhausted. */
+function undiscovered(channel: ChannelName): ChannelCursor {
+  return { channel, offset: 0, width: 1, oldest: 0, done: false };
+}
+
+function exhausted(channel: ChannelName): ChannelCursor {
+  return { ...undiscovered(channel), done: true };
 }
 
 function addAll(
@@ -356,6 +391,19 @@ function addAll(
   for (const event of events) {
     merged.set(eventKey(event), event);
   }
+}
+
+/** The oldest seq held for a channel with no gap below it — where the next window has to reach. */
+function contiguousOldest(
+  merged: Map<string, RawChannelEvent>,
+  channel: ChannelName,
+  from: number,
+): number {
+  let oldest = from;
+  while (oldest > 0 && merged.has(`${channel}:${oldest - 1}`)) {
+    oldest -= 1;
+  }
+  return oldest;
 }
 
 function oldestTimestamp(
@@ -370,8 +418,20 @@ function oldestTimestamp(
   return oldest;
 }
 
+function minSeq(events: RawChannelEvent[]): number {
+  return events.reduce(
+    (min, event) => Math.min(min, event.seq),
+    Number.MAX_SAFE_INTEGER,
+  );
+}
+
 function maxSeq(events: RawChannelEvent[]): number {
   return events.reduce((max, event) => Math.max(max, event.seq), 0);
+}
+
+/** Events in a window, measured from its seq span rather than its length (frames can repeat). */
+function span(events: RawChannelEvent[]): number {
+  return maxSeq(events) - minSeq(events) + 1;
 }
 
 function eventKey(event: RawChannelEvent): string {
