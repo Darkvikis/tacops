@@ -16,9 +16,15 @@ pub(crate) const INSTALL_ID: &str = "scraper-installid";
 // backend validates them.
 pub(crate) struct EnvironmentConfig {
     base_url: &'static str,
-    // Same host/session as base_url's player/player2 tree, but game-event calls (GET_CRUSADE and
-    // friends) live under a different path and need their own signed envelope - see crusades.rs.
+    // Same host/session as base_url's player/player2 tree, but game-event calls (GET_CRUSADE,
+    // GET_GUILD_STATE and friends) live under a different path and carry an anti-tamper MD5
+    // digest in their own signed envelope - see crusades.rs.
     pub(crate) game_event_base_url: &'static str,
+    // The realtime channel push service (guild chat / guild events) — the bare host (wss on 443).
+    // Auth is userId + sessionId sent as websocket handshake HEADERS, not in the URL path. The
+    // handshake is done by hand (see guild_chat.rs) so the header names keep their exact camelCase,
+    // which is why this is a host rather than a full URL.
+    pub(crate) websocket_host: &'static str,
     environment_id: &'static str,
     bundle_id: &'static str,
     jenkins_build_branch_info: &'static str,
@@ -28,6 +34,7 @@ pub(crate) struct EnvironmentConfig {
 const PROD_CONFIG: EnvironmentConfig = EnvironmentConfig {
     base_url: "https://api-live.loki.snowprintstudios.com/player/player2/userId",
     game_event_base_url: "https://api-live.loki.snowprintstudios.com/game-event/game3/userId",
+    websocket_host: "websocket-live.loki.snowprintstudios.com",
     environment_id: "live-loki",
     bundle_id: "com.snowprintstudios.tacticus",
     jenkins_build_branch_info: "release",
@@ -40,6 +47,7 @@ const PROD_CONFIG: EnvironmentConfig = EnvironmentConfig {
 const QA_CONFIG: EnvironmentConfig = EnvironmentConfig {
     base_url: "https://api-staging.loki.snowprintstudios.com/player/player2/userId",
     game_event_base_url: "https://api-staging.loki.snowprintstudios.com/game-event/game3/userId",
+    websocket_host: "websocket-staging.loki.snowprintstudios.com",
     environment_id: "staging-loki",
     bundle_id: "com.snowprintstudios.loki.qa",
     jenkins_build_branch_info: "staging",
@@ -117,19 +125,28 @@ pub(crate) async fn post(client: &reqwest::Client, url: &str, body: &Value) -> R
     Ok(parsed)
 }
 
+// Without an explicit timeout, reqwest waits forever on a stalled connection - a real request
+// that just hung was reported to hang the whole app, since nothing here ever gave up.
+pub(crate) fn http_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(20))
+        .build()
+        .map_err(|e| format!("failed to build HTTP client: {e}"))
+}
+
 // APP_START -> CONNECT, matching the real client's boot sequence (confirmed via Proxyman
 // capture). CONNECT exchanges the account's clientSecret/snowId for a sessionId; every call
 // after that uses the sessionId-suffixed URL. Shared by every command that needs a session
-// (GET_PLAYER, GET_CRUSADE, GET_LEADERBOARD_2, ...) since the sessionId is valid across both the
-// player/player2 and game-event/game3 URL trees, not just the one it was minted under.
-pub(crate) async fn bootstrap_session(
+// (GET_PLAYER, GET_CRUSADE, GET_LEADERBOARD_2, guild chat, ...) since the sessionId is valid
+// across both the player/player2 and game-event/game3 URL trees, not just the one it was minted
+// under.
+pub(crate) async fn connect(
     client: &reqwest::Client,
-    environment: &str,
+    config: &EnvironmentConfig,
     user_id: &str,
     client_secret: &str,
     snow_id: &str,
-) -> Result<(&'static EnvironmentConfig, String, String), String> {
-    let config = environment_config(environment)?;
+) -> Result<String, String> {
     let base_url = format!("{}/{user_id}", config.base_url);
 
     let app_start_body = envelope(
@@ -189,12 +206,39 @@ pub(crate) async fn bootstrap_session(
     }
     let connect_body = envelope("CONNECT", connect_data, config);
     let connect_response = post(client, &base_url, &connect_body).await?;
-    let session_id = connect_response["eventResult"]["eventResponseData"]["userData"]["sessionId"]
+    connect_response["eventResult"]["eventResponseData"]["userData"]["sessionId"]
         .as_str()
-        .ok_or_else(|| "CONNECT response didn't contain a sessionId - is clientSecret/snowId correct?".to_string())?
-        .to_string();
+        .ok_or_else(|| "CONNECT response didn't contain a sessionId - is clientSecret/snowId correct?".to_string())
+        .map(|s| s.to_string())
+}
 
+// Convenience over connect() for commands that only need a session: resolves the environment,
+// and hands back the config plus the userId-suffixed base URL alongside the sessionId.
+pub(crate) async fn bootstrap_session(
+    client: &reqwest::Client,
+    environment: &str,
+    user_id: &str,
+    client_secret: &str,
+    snow_id: &str,
+) -> Result<(&'static EnvironmentConfig, String, String), String> {
+    let config = environment_config(environment)?;
+    let base_url = format!("{}/{user_id}", config.base_url);
+    let session_id = connect(client, config, user_id, client_secret, snow_id).await?;
     Ok((config, base_url, session_id))
+}
+
+// A single authenticated player event on an already-established session.
+pub(crate) async fn player_event(
+    client: &reqwest::Client,
+    config: &EnvironmentConfig,
+    user_id: &str,
+    session_id: &str,
+    player_event_type: &str,
+    player_event_data: Value,
+) -> Result<Value, String> {
+    let session_url = format!("{}/{user_id}/sessionId/{session_id}", config.base_url);
+    let body = envelope(player_event_type, player_event_data, config);
+    post(client, &session_url, &body).await
 }
 
 // GET_PLAYER needs no dynamic parameters at all and returns the player's full state (roster,
@@ -207,19 +251,18 @@ pub async fn fetch_player_data(
     client_secret: String,
     snow_id: String,
 ) -> Result<Value, String> {
-    // Without an explicit timeout, reqwest waits forever on a stalled connection - a real request
-    // that just hung was reported to hang the whole app, since nothing here ever gave up.
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(20))
-        .build()
-        .map_err(|e| format!("failed to build HTTP client: {e}"))?;
-
-    let (config, base_url, session_id) =
-        bootstrap_session(&client, &environment, &user_id, &client_secret, &snow_id).await?;
-
-    let session_url = format!("{base_url}/sessionId/{session_id}");
-    let get_player_body = envelope("GET_PLAYER", json!({ "storefrontCountryCode": "NotAvailable" }), config);
-    let result = post(&client, &session_url, &get_player_body).await;
+    let config = environment_config(&environment)?;
+    let client = http_client()?;
+    let session_id = connect(&client, config, &user_id, &client_secret, &snow_id).await?;
+    let result = player_event(
+        &client,
+        config,
+        &user_id,
+        &session_id,
+        "GET_PLAYER",
+        json!({ "storefrontCountryCode": "NotAvailable" }),
+    )
+    .await;
     // Only track real prod usage - QA/dev testing shouldn't pollute real usage numbers.
     if result.is_ok() && environment == "prod" {
         track_usage(&user_id);
