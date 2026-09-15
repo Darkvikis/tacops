@@ -1,4 +1,4 @@
-import { fetchPlayerDataFromLoki } from "./loki-client";
+import { fetchCrusadeDataFromLoki, fetchLeaderboardDataFromLoki, fetchPlayerDataFromLoki } from "./loki-client";
 import { recordSighting } from "./track";
 import { renderInsightsPage } from "./insights";
 
@@ -11,6 +11,10 @@ interface RequestBody {
   userId: string;
   clientSecret: string;
   snowId?: string;
+}
+
+interface LeaderboardRequestBody extends RequestBody {
+  leaderboardIds: string[];
 }
 
 interface TrackRequestBody {
@@ -32,6 +36,32 @@ export default {
           body.userId,
           body.clientSecret,
           body.snowId ?? "",
+        );
+        return Response.json(data);
+      } catch (error) {
+        return Response.json({ error: `${error}` }, { status: 502 });
+      }
+    }
+
+    if (url.pathname === "/api/fetch-crusade-data" && request.method === "POST") {
+      const body = (await request.json()) as RequestBody;
+      try {
+        const data = await fetchCrusadeDataFromLoki(body.environment, body.userId, body.clientSecret, body.snowId ?? "");
+        return Response.json(data);
+      } catch (error) {
+        return Response.json({ error: `${error}` }, { status: 502 });
+      }
+    }
+
+    if (url.pathname === "/api/fetch-leaderboard-data" && request.method === "POST") {
+      const body = (await request.json()) as LeaderboardRequestBody;
+      try {
+        const data = await fetchLeaderboardDataFromLoki(
+          body.environment,
+          body.userId,
+          body.clientSecret,
+          body.snowId ?? "",
+          body.leaderboardIds,
         );
         return Response.json(data);
       } catch (error) {

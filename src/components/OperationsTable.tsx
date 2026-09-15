@@ -12,25 +12,41 @@ import {
   entryStatusLabel,
   getObjectiveDisplay,
 } from "../board/board-view-model";
+import { getEntryFulfillment, type EntryFulfillment } from "../board/entry-fulfillment";
 import { operationName } from "../board/operation-name";
 import { deployIconUrl } from "../board/deploy-icon";
-import type { Environment, ExpeditionBoardEntry } from "../api/types";
+import type { Environment, ExpeditionBoardEntry, RawUnit } from "../api/types";
 import type { BoardAssignmentResult } from "../board/board-solver";
 
 const cellClass = "border-b border-black/10 px-3 py-2 align-top dark:border-white/15";
+
+// null = fulfillment isn't known yet (solver hasn't produced a result for the current board) -
+// stay neutral rather than guessing. A left-edge accent keeps the shared grid lines (cellClass)
+// untouched. "unrunnable" is red, "partial" (runs but misses a bonus objective) is amber,
+// "complete" is green.
+function rowAccentClass(fulfillment: EntryFulfillment | null): string {
+  if (fulfillment === "complete") return "border-l-4 border-green-700/60 dark:border-green-500/60";
+  if (fulfillment === "partial") return "border-l-4 border-amber-700/60 dark:border-amber-500/60";
+  if (fulfillment === "unrunnable") return "border-l-4 border-red-700/60 dark:border-red-500/60";
+  return "border-l-4 border-transparent";
+}
 
 export function OperationsTable({
   board,
   environment,
   assignment,
+  solverReady,
   selectedExpeditionId,
   onSelect,
+  heroes,
 }: {
   board: ExpeditionBoardEntry[];
   environment: Environment;
   assignment: BoardAssignmentResult;
+  solverReady: boolean;
   selectedExpeditionId: string | null;
   onSelect: (expeditionId: string) => void;
+  heroes: RawUnit[];
 }) {
   if (board.length === 0) {
     return <p>No expeditions on the board right now.</p>;
@@ -63,6 +79,7 @@ export function OperationsTable({
           const solution = assignment.get(entry.expeditionId);
           const dimmed = selectedExpeditionId !== null && selectedExpeditionId !== entry.expeditionId;
           const name = operationName(entry.id);
+          const fulfillment = unavailable || solverReady ? getEntryFulfillment(entry, assignment) : null;
 
           return (
             <tr
@@ -71,7 +88,7 @@ export function OperationsTable({
                 e.stopPropagation();
                 onSelect(entry.expeditionId);
               }}
-              className={`cursor-pointer transition-opacity ${dimmed ? "opacity-20" : ""}`}
+              className={`cursor-pointer transition-opacity ${rowAccentClass(fulfillment)} ${dimmed ? "opacity-20" : ""}`}
             >
               <td className={cellClass}>
                 <Icon src={entryRarityIconUrl(entry)} />
@@ -89,7 +106,7 @@ export function OperationsTable({
                   {entry.bonusObjectives.map((o, i) => {
                     const display = getObjectiveDisplay(o);
                     if (display.badge === "no-ranged-attack" && display.iconUrl) {
-                      return <IconBadge key={i} src={display.iconUrl} title={display.label} badgeText="✕" />;
+                      return <IconBadge key={i} src={display.iconUrl} title={display.label} />;
                     }
                     return display.iconUrl ? (
                       <Icon key={i} src={display.iconUrl} title={display.label} />
@@ -112,7 +129,7 @@ export function OperationsTable({
               <td className={cellClass}>
                 {!unavailable && <PortraitList ids={solution?.run ? solution.optionalCharacterIds : []} />}
               </td>
-              <td className={cellClass}>{unavailable && <DispatchedUnitsRow entry={entry} />}</td>
+              <td className={cellClass}>{unavailable && <DispatchedUnitsRow entry={entry} heroes={heroes} />}</td>
             </tr>
           );
         })}

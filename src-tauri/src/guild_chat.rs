@@ -63,7 +63,8 @@ fn sign_game_event(
     let input = format!(
         "{salt}{event_id}{game_event_type}{GAME_EVENT_UNIVERSE_VERSION}{GAME_EVENT_CONFIG_VERSION}{event_data_string}"
     );
-    format!("{:X}", md5::compute(input.as_bytes()))
+    use md5::Digest;
+    md5::Md5::digest(input.as_bytes()).iter().map(|b| format!("{b:02X}")).collect()
 }
 
 /// Posts a signed game event. `event_data` is serialized once for the digest and the same Value is

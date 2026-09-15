@@ -1,5 +1,7 @@
 import { Icon } from "./Icon";
 import { watchAdIconUrl } from "../watch-ad-icon";
+import { PVP_MAX } from "../api/resource-regen";
+import { formatDateTime, urgencyColorClass, DEFAULT_SUBTEXT_CLASS } from "../format-date-time";
 import {
   guildBossBombIconUrl,
   guildBossIconUrl,
@@ -16,26 +18,111 @@ interface ResourceTokensProps {
   adViewsRemaining: number | null;
 }
 
+interface SubtextLine {
+  text: string;
+  className: string;
+}
+
+// "Next token" is never urgency-colored (there's nothing to warn about), but "Cap"/"Burn" lines
+// are deadlines worth calling out as they approach - see urgencyColorClass.
+function regenSubtext(nextTokenAt: number | null, capAt: number | null): SubtextLine[] {
+  const lines: SubtextLine[] = [];
+  if (nextTokenAt !== null) lines.push({ text: `Next: ${formatDateTime(nextTokenAt)}`, className: DEFAULT_SUBTEXT_CLASS });
+  if (capAt !== null) lines.push({ text: `Cap: ${formatDateTime(capAt)}`, className: urgencyColorClass(capAt) });
+  return lines;
+}
+
 export function ResourceTokens({ resources, adViewsRemaining }: ResourceTokensProps) {
-  const entries: Array<{ key: string; label: string; icon: string; value: number | string }> = [
-    { key: "stamina", label: "Stamina", icon: staminaIconUrl(), value: resources.stamina },
+  // Absent between PVP seasons - just omit the line rather than showing a misleading "0 / 0".
+  const pvpPositionLine =
+    resources.pvpPosition !== null && resources.pvpGroupSize !== null
+      ? `${resources.pvpPosition} / ${resources.pvpGroupSize}`
+      : null;
+  // PVP's "next token" comes from the server's own staminaRegenUntil deadline, not computed
+  // regen math - see computePvpTimings in resource-regen.ts for the three possible states.
+  const pvpScheduleLines: SubtextLine[] = resources.pvpStopped
+    ? [{ text: `${resources.pvp}/${PVP_MAX} (no more regen)`, className: DEFAULT_SUBTEXT_CLASS }]
+    : [
+        resources.pvpNextTokenAt !== null
+          ? { text: `Next: ${formatDateTime(resources.pvpNextTokenAt)}`, className: DEFAULT_SUBTEXT_CLASS }
+          : null,
+        resources.pvpCapAt !== null
+          ? { text: `Cap: ${formatDateTime(resources.pvpCapAt)}`, className: urgencyColorClass(resources.pvpCapAt) }
+          : resources.pvpPausesAt !== null
+            ? { text: `Pauses: ${formatDateTime(resources.pvpPausesAt)}`, className: DEFAULT_SUBTEXT_CLASS }
+            : null,
+      ].filter((line): line is SubtextLine => line !== null);
+  const pvpPositionSubtext: SubtextLine[] = pvpPositionLine ? [{ text: pvpPositionLine, className: DEFAULT_SUBTEXT_CLASS }] : [];
+  const pvpSubtext = [...pvpPositionSubtext, ...pvpScheduleLines];
+
+  // Raid tokens (guild boss attempts) get burned at the next 09:45/22:45 UTC checkpoint if still
+  // sitting at cap then - common when waiting for a raid target to open, so this is a deadline to
+  // watch, not an error state. It gets the same urgency coloring as a cap time - it'll typically
+  // land on a different tier/color than the cap line above it, since it's a different timestamp.
+  const guildBossSubtext: SubtextLine[] = [
+    ...regenSubtext(resources.guildBossNextTokenAt, resources.guildBossCapAt),
+    ...(resources.guildBossBurnAt !== null
+      ? [{ text: `Burn: ${formatDateTime(resources.guildBossBurnAt)}`, className: urgencyColorClass(resources.guildBossBurnAt) }]
+      : []),
+  ];
+
+  const entries: Array<{ key: string; label: string; icon: string; value: number | string; subtext?: SubtextLine[] }> = [
+    {
+      key: "stamina",
+      label: "Stamina",
+      icon: staminaIconUrl(),
+      value: resources.stamina,
+      subtext: regenSubtext(resources.staminaNextTokenAt, resources.staminaCapAt),
+    },
     // Written defensively rather than assuming adViewsRemaining is always set by the time this
     // renders - a genuine 0 must still show as 0, never silently hidden by a truthiness check.
     { key: "adViews", label: "Ad views remaining", icon: watchAdIconUrl(), value: adViewsRemaining === null ? "null" : adViewsRemaining },
-    { key: "treasureBeach", label: "Treasure Beach", icon: treasureBeachIconUrl(), value: resources.treasureBeach },
-    { key: "waves", label: "Waves", icon: wavesIconUrl(), value: resources.waves },
-    { key: "pvp", label: "PVP", icon: pvpIconUrl(), value: resources.pvp },
-    { key: "guildBoss", label: "Guild Boss", icon: guildBossIconUrl(), value: resources.guildBoss },
-    { key: "guildBossBomb", label: "Guild Boss Bomb", icon: guildBossBombIconUrl(), value: resources.guildBossBomb },
+    {
+      key: "treasureBeach",
+      label: "Treasure Beach",
+      icon: treasureBeachIconUrl(),
+      value: resources.treasureBeach,
+      subtext: regenSubtext(resources.treasureBeachNextTokenAt, resources.treasureBeachCapAt),
+    },
+    {
+      key: "waves",
+      label: "Waves",
+      icon: wavesIconUrl(),
+      value: resources.waves,
+      subtext: regenSubtext(resources.wavesNextTokenAt, resources.wavesCapAt),
+    },
+    { key: "pvp", label: "PVP", icon: pvpIconUrl(), value: resources.pvp, subtext: pvpSubtext },
+    {
+      key: "guildBoss",
+      label: "Guild Boss",
+      icon: guildBossIconUrl(),
+      value: resources.guildBoss,
+      subtext: guildBossSubtext,
+    },
+    {
+      key: "guildBossBomb",
+      label: "Guild Boss Bomb",
+      icon: guildBossBombIconUrl(),
+      value: resources.guildBossBomb,
+      subtext: regenSubtext(resources.guildBossBombNextTokenAt, resources.guildBossBombCapAt),
+    },
     { key: "mowAmmo", label: "Machines of War Ammo", icon: mowAmmoIconUrl(), value: resources.mowAmmo },
   ];
 
   return (
-    <div className="flex flex-wrap items-start justify-center gap-4">
+    <div className="flex flex-wrap items-start justify-center gap-3">
       {entries.map((entry) => (
-        <div key={entry.key} className="flex flex-col items-center gap-1">
+        <div
+          key={entry.key}
+          className="flex h-36 w-44 flex-col items-center gap-1 rounded-lg border border-black/10 bg-white/60 p-2 text-center dark:border-white/15 dark:bg-white/5"
+        >
           <Icon src={entry.icon} title={entry.label} />
           <span className="text-sm font-medium">{entry.value}</span>
+          {entry.subtext?.map((line, i) => (
+            <span key={i} className={`text-xs ${line.className}`}>
+              {line.text}
+            </span>
+          ))}
         </div>
       ))}
     </div>

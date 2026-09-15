@@ -3,6 +3,15 @@ import { invokeWithTimeout } from "./invoke-with-timeout";
 import { fetchWithTimeout } from "./fetch-with-timeout";
 import characterData from "../assets/character-data.json";
 import mowData from "../assets/mow-data.json";
+import { calculateBundledCharacterPowers } from "../characters/character-power";
+import {
+  computeGuildBossBombTimings,
+  computeGuildBossTimings,
+  computePvpTimings,
+  computeStaminaTimings,
+  computeTreasureBeachTimings,
+  computeWavesTimings,
+} from "./resource-regen";
 import type { Credentials, Environment, ExpeditionBoardEntry, PlayerResources, RawUnit } from "./types";
 
 const characterIds = new Set((characterData as { id: string }[]).map((c) => c.id));
@@ -18,6 +27,8 @@ export interface PlayerData {
   machinesOfWar: RawUnit[];
   adViewsRemaining: number;
   resources: PlayerResources;
+  // The untouched GET_PLAYER envelope, kept around only so it can be exported as-is.
+  raw: unknown;
 }
 
 // webCredentials is only read on the web build - the desktop build auto-discovers credentials
@@ -52,15 +63,59 @@ export async function fetchPlayerData(
     ...(data as object),
   }));
 
+  // All-or-nothing: a single missing/stale unit definition (e.g. a character added since the
+  // bundled GameConfig extraction) throws for the whole batch rather than returning some units
+  // with power and others without, so a mixed-confidence power state never reaches the solver.
+  try {
+    const powers = calculateBundledCharacterPowers(response);
+    const powerByUnitId = new Map(powers.map((p) => [p.unitId, p.power]));
+    for (const unit of units) {
+      const power = powerByUnitId.get(unit.id);
+      if (power !== undefined) unit.power = power;
+    }
+  } catch (error) {
+    console.error("Failed to calculate character power - leaving power unset for this fetch", error);
+  }
+
+  const powerLevel = hero?.player?.powerLevel;
+  const staminaTimings = computeStaminaTimings(hero?.stamina, powerLevel);
+  const wavesTimings = computeWavesTimings(hero?.progress?.waves?.stamina);
+  const treasureBeachTimings = computeTreasureBeachTimings(hero?.progress?.treasureBeach?.stamina);
+  const guildBossTimings = computeGuildBossTimings(hero?.progress?.guildState?.guildBoss?.attempts);
+  const guildBossBombTimings = computeGuildBossBombTimings(hero?.progress?.guildState?.guildBoss?.bombAttempts);
+  const pvpTimings = computePvpTimings(
+    hero?.progress?.pvpState?.stamina,
+    hero?.progress?.pvpState?.staminaRegenUntil ?? null,
+  );
+
   // "currentAmount" is omitted entirely (rather than sent as 0) when a regenerating resource is
   // actually at 0, so every one of these needs a fallback rather than trusting the field's presence.
   const resources: PlayerResources = {
     stamina: hero?.stamina?.currentAmount ?? 0,
+    staminaNextTokenAt: staminaTimings.nextTokenAt,
+    staminaCapAt: staminaTimings.capAt,
     treasureBeach: hero?.progress?.treasureBeach?.stamina?.currentAmount ?? 0,
+    treasureBeachNextTokenAt: treasureBeachTimings.nextTokenAt,
+    treasureBeachCapAt: treasureBeachTimings.capAt,
     waves: hero?.progress?.waves?.stamina?.currentAmount ?? 0,
+    wavesNextTokenAt: wavesTimings.nextTokenAt,
+    wavesCapAt: wavesTimings.capAt,
     pvp: hero?.progress?.pvpState?.stamina?.currentAmount ?? 0,
+    // Absent between seasons - null (not 0) so the UI can tell "not currently ranked" apart from
+    // an actual position/size of 0.
+    pvpPosition: hero?.progress?.pvpState?.playerPosition ?? null,
+    pvpGroupSize: hero?.progress?.pvpState?.actualGroupSize ?? null,
+    pvpNextTokenAt: pvpTimings.nextTokenAt,
+    pvpCapAt: pvpTimings.capAt,
+    pvpPausesAt: pvpTimings.pausesAt,
+    pvpStopped: pvpTimings.stopped,
     guildBoss: hero?.progress?.guildState?.guildBoss?.attempts?.currentAmount ?? 0,
+    guildBossNextTokenAt: guildBossTimings.nextTokenAt,
+    guildBossCapAt: guildBossTimings.capAt,
+    guildBossBurnAt: guildBossTimings.burnAt,
     guildBossBomb: hero?.progress?.guildState?.guildBoss?.bombAttempts?.currentAmount ?? 0,
+    guildBossBombNextTokenAt: guildBossBombTimings.nextTokenAt,
+    guildBossBombCapAt: guildBossBombTimings.capAt,
     mowAmmo: hero?.resources?.groupedCurrencies?.global?.machinesOfWarAmmo ?? 0,
   };
 
@@ -68,7 +123,10 @@ export async function fetchPlayerData(
     board,
     heroes: units.filter((u) => characterIds.has(u.id)),
     machinesOfWar: units.filter((u) => mowIds.has(u.id)),
-    adViewsRemaining: hero?.player?.adViews?.currentAmount ?? 0,
+    // Absent (not 0) means the game hasn't reported ad-view usage yet - e.g. no ads watched today
+    // - in which case the daily allotment (7) hasn't been drawn down at all.
+    adViewsRemaining: hero?.player?.adViews?.currentAmount ?? 7,
     resources,
+    raw: response,
   };
 }

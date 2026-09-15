@@ -26,10 +26,11 @@ reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1.53.1", features = ["macros", "time", "sync", "rt", "net"] }
 tokio-tungstenite = { version = "0.30.0", features = ["native-tls"] }
 futures-util = "0.3.34"
-md5 = "0.8.1"
 uuid = { version = "1.24.0", features = ["v4"] }
 native-tls = "0.2.18"
 tokio-native-tls = "0.3.1"
 dotenvy = "0.15.7"
 sha2 = "0.10"
+tauri-plugin-dialog = "2"
+md-5 = "0.10"
 

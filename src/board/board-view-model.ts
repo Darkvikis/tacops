@@ -13,16 +13,31 @@ import type { BonusObjective, ExpeditionBoardEntry } from "../api/types";
 
 // "Dispatched" is mid-run; "Completed" means the op finished but its reward hasn't been claimed
 // yet - the squad hasn't returned in either case, so both are untouchable/undeployable.
-const UNAVAILABLE_STATUSES = new Set(["Dispatched", "Completed"]);
+// Matched case-insensitively - an exact-case mismatch here would silently leave dispatched
+// entries looking "available", both breaking the solver stuck-on-"Solving" fast path below and
+// mislabeling the entry as Ready in the UI.
+const UNAVAILABLE_STATUSES = new Set(["dispatched", "completed"]);
+
+function normalizedStatus(entry: ExpeditionBoardEntry): string {
+  return entry.status.toLowerCase();
+}
 
 export function entryIsUnavailable(entry: ExpeditionBoardEntry): boolean {
-  return UNAVAILABLE_STATUSES.has(entry.status);
+  return UNAVAILABLE_STATUSES.has(normalizedStatus(entry));
 }
 
 export function entryStatusLabel(entry: ExpeditionBoardEntry): "Ready" | "Dispatched" | "Complete" {
-  if (entry.status === "Dispatched") return "Dispatched";
-  if (entry.status === "Completed") return "Complete";
+  const status = normalizedStatus(entry);
+  if (status === "dispatched") return "Dispatched";
+  if (status === "completed") return "Complete";
   return "Ready";
+}
+
+export function entryFinishAt(entry: ExpeditionBoardEntry): number | null {
+  if (normalizedStatus(entry) !== "dispatched" || entry.startedOn === undefined) {
+    return null;
+  }
+  return entry.startedOn + entry.duration * 1000;
 }
 
 export function entryRarity(entry: ExpeditionBoardEntry): Rarity {

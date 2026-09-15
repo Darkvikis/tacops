@@ -13,6 +13,7 @@ import type { RawUnit } from "../api/types";
 export interface CharacterRow {
   id: string;
   name: string;
+  power?: number;
   portraitUrl: string;
   faction: string;
   factionIconUrl?: string;
@@ -32,6 +33,7 @@ export function getCharacterRow(hero: RawUnit): CharacterRow {
   return {
     id: hero.id,
     name: profile.name,
+    power: hero.power,
     portraitUrl: characterPortraitUrl(hero.id),
     faction: profile.faction,
     factionIconUrl: factionIconUrl(profile.faction),

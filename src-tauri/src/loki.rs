@@ -5,8 +5,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 // Confirmed via real Proxyman captures: the actual game client reuses this exact trio unchanged
 // across APP_START, CONNECT, and GET_PLAYER in the same session - not re-derived per call. Same
 // values on both prod and QA.
-const GAME_CONFIG_VERSION: &str = "f92fb06ae9c02542bb3f520fc562f709";
-const MULTI_CONFIG_VERSION: &str = "897f8de5439de707acaf6b3add1eeba3";
+pub(crate) const GAME_CONFIG_VERSION: &str = "f92fb06ae9c02542bb3f520fc562f709";
+pub(crate) const MULTI_CONFIG_VERSION: &str = "897f8de5439de707acaf6b3add1eeba3";
 pub(crate) const INSTALL_ID: &str = "scraper-installid";
 
 // The fields below this line come straight from a real captured QA CONNECT request and differ
@@ -16,8 +16,9 @@ pub(crate) const INSTALL_ID: &str = "scraper-installid";
 // backend validates them.
 pub(crate) struct EnvironmentConfig {
     base_url: &'static str,
-    // The signed game-event service (game3). Auth is still userId + sessionId in the URL path,
-    // but these events carry an anti-tamper MD5 digest; GET_GUILD_STATE only lives here.
+    // Same host/session as base_url's player/player2 tree, but game-event calls (GET_CRUSADE,
+    // GET_GUILD_STATE and friends) live under a different path and carry an anti-tamper MD5
+    // digest in their own signed envelope - see crusades.rs.
     pub(crate) game_event_base_url: &'static str,
     // The realtime channel push service (guild chat / guild events) — the bare host (wss on 443).
     // Auth is userId + sessionId sent as websocket handshake HEADERS, not in the URL path. The
@@ -27,7 +28,7 @@ pub(crate) struct EnvironmentConfig {
     environment_id: &'static str,
     bundle_id: &'static str,
     jenkins_build_branch_info: &'static str,
-    built_in_multi_config_version: &'static str,
+    pub(crate) built_in_multi_config_version: &'static str,
 }
 
 const PROD_CONFIG: EnvironmentConfig = EnvironmentConfig {
@@ -40,6 +41,9 @@ const PROD_CONFIG: EnvironmentConfig = EnvironmentConfig {
     built_in_multi_config_version: "f34892307c9d4727869adf53f3afa446",
 };
 
+// game_event_base_url here is derived by analogy with prod (same api-staging host, same
+// player/player2 -> game-event/game3 swap) - unconfirmed by a real QA capture, unlike everything
+// else in this file.
 const QA_CONFIG: EnvironmentConfig = EnvironmentConfig {
     base_url: "https://api-staging.loki.snowprintstudios.com/player/player2/userId",
     game_event_base_url: "https://api-staging.loki.snowprintstudios.com/game-event/game3/userId",
@@ -80,7 +84,7 @@ fn track_usage(user_id: &str) {
     });
 }
 
-fn envelope(player_event_type: &str, player_event_data: Value, config: &EnvironmentConfig) -> Value {
+pub(crate) fn envelope(player_event_type: &str, player_event_data: Value, config: &EnvironmentConfig) -> Value {
     json!({
         "playerEvent": {
             "playerEventType": player_event_type,
@@ -130,10 +134,12 @@ pub(crate) fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("failed to build HTTP client: {e}"))
 }
 
-// APP_START -> CONNECT, matching the real client's boot sequence (confirmed via Proxyman capture).
-// CONNECT exchanges the account's clientSecret/snowId for a sessionId; every authenticated call
-// after that uses the sessionId-suffixed URL. Returns the sessionId, which both GET_PLAYER and the
-// guild-chat commands authenticate with.
+// APP_START -> CONNECT, matching the real client's boot sequence (confirmed via Proxyman
+// capture). CONNECT exchanges the account's clientSecret/snowId for a sessionId; every call
+// after that uses the sessionId-suffixed URL. Shared by every command that needs a session
+// (GET_PLAYER, GET_CRUSADE, GET_LEADERBOARD_2, guild chat, ...) since the sessionId is valid
+// across both the player/player2 and game-event/game3 URL trees, not just the one it was minted
+// under.
 pub(crate) async fn connect(
     client: &reqwest::Client,
     config: &EnvironmentConfig,
@@ -206,6 +212,21 @@ pub(crate) async fn connect(
         .map(|s| s.to_string())
 }
 
+// Convenience over connect() for commands that only need a session: resolves the environment,
+// and hands back the config plus the userId-suffixed base URL alongside the sessionId.
+pub(crate) async fn bootstrap_session(
+    client: &reqwest::Client,
+    environment: &str,
+    user_id: &str,
+    client_secret: &str,
+    snow_id: &str,
+) -> Result<(&'static EnvironmentConfig, String, String), String> {
+    let config = environment_config(environment)?;
+    let base_url = format!("{}/{user_id}", config.base_url);
+    let session_id = connect(client, config, user_id, client_secret, snow_id).await?;
+    Ok((config, base_url, session_id))
+}
+
 // A single authenticated player event on an already-established session.
 pub(crate) async fn player_event(
     client: &reqwest::Client,
@@ -220,8 +241,9 @@ pub(crate) async fn player_event(
     post(client, &session_url, &body).await
 }
 
-// GET_PLAYER returns the player's full state (roster, resources, progress - including the
-// expeditions board), not anything specific to a particular live event.
+// GET_PLAYER needs no dynamic parameters at all and returns the player's full state (roster,
+// resources, progress - including the expeditions board), not anything specific to a particular
+// live event.
 #[tauri::command]
 pub async fn fetch_player_data(
     environment: String,

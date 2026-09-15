@@ -8,12 +8,16 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "worker:dev": "vite build && wrangler dev"
+    "worker:dev": "vite build && wrangler dev",
+    "test": "vitest run",
+    "extract-character-power-config": "node scripts/extract-character-power-config.ts"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.7.2",
     "@tauri-apps/plugin-opener": "^2",
     "javascript-lp-solver": "^1.0.3",
+    "js-md5": "^0.9.2",
     "react": "^19.2.8",
     "react-dom": "^19.2.8"
   },
@@ -27,6 +31,7 @@
     "tailwindcss": "^4.3.3",
     "typescript": "~5.6.2",
     "vite": "^6.0.3",
+    "vitest": "^4.1.10",
     "wrangler": "^4.122.0"
   }
 }

@@ -1,22 +1,33 @@
 import { Icon } from "./Icon";
 import { IconRow } from "./IconRow";
-import { getDispatchedUnits } from "../board/board-view-model";
-import type { ExpeditionBoardEntry } from "../api/types";
+import { getDispatchedUnits, entryFinishAt } from "../board/board-view-model";
+import { formatDateTime } from "../format-date-time";
+import type { ExpeditionBoardEntry, RawUnit } from "../api/types";
 
-export function DispatchedUnitsRow({ entry }: { entry: ExpeditionBoardEntry }) {
+export function DispatchedUnitsRow({ entry, heroes }: { entry: ExpeditionBoardEntry; heroes: RawUnit[] }) {
   const dispatchedUnits = getDispatchedUnits(entry);
   if (!dispatchedUnits) {
     return null;
   }
+  const powerById = new Map(heroes.map((hero) => [hero.id, hero.power ?? null]));
+  const sortedUnits = [...dispatchedUnits].sort(
+    (a, b) => (powerById.get(b.unitId) ?? -Infinity) - (powerById.get(a.unitId) ?? -Infinity),
+  );
+  const finishAt = entryFinishAt(entry);
   return (
-    <IconRow>
-      {dispatchedUnits.map((unit) =>
-        unit.portraitUrl ? (
-          <Icon key={unit.unitId} src={unit.portraitUrl} title={unit.unitId} />
-        ) : (
-          <span key={unit.unitId}>{unit.unitId}</span>
-        ),
+    <div className="flex flex-col items-start gap-1">
+      <IconRow>
+        {sortedUnits.map((unit) =>
+          unit.portraitUrl ? (
+            <Icon key={unit.unitId} src={unit.portraitUrl} title={unit.unitId} />
+          ) : (
+            <span key={unit.unitId}>{unit.unitId}</span>
+          ),
+        )}
+      </IconRow>
+      {finishAt !== null && (
+        <span className="text-xs text-neutral-500 dark:text-neutral-400">Finishes: {formatDateTime(finishAt)}</span>
       )}
-    </IconRow>
+    </div>
   );
 }

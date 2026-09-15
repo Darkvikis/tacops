@@ -10,6 +10,8 @@ export function CharactersTable({ heroes }: { heroes: RawUnit[] }) {
     return <p>No characters found.</p>;
   }
 
+  const sortedHeroes = [...heroes].sort((a, b) => (b.power ?? -Infinity) - (a.power ?? -Infinity));
+
   return (
     <table className="mt-4 w-full table-auto border-collapse text-left">
       <thead>
@@ -25,13 +27,16 @@ export function CharactersTable({ heroes }: { heroes: RawUnit[] }) {
         </tr>
       </thead>
       <tbody>
-        {heroes.map((hero) => {
+        {sortedHeroes.map((hero) => {
           const row = getCharacterRow(hero);
           return (
             <tr key={row.id}>
               <td className={cellClass}>{row.name}</td>
               <td className={cellClass}>
-                <Icon src={row.portraitUrl} title={row.id} />
+                <Icon
+                  src={row.portraitUrl}
+                  title={`${row.id} (Power: ${row.power?.toLocaleString() ?? "unknown"})`}
+                />
               </td>
               <td className={cellClass}>{row.factionIconUrl ? <Icon src={row.factionIconUrl} /> : row.faction}</td>
               <td className={cellClass}>

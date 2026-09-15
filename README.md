@@ -42,20 +42,25 @@ frontend, swapping the Rust backend for a small serverless proxy (see below).
   and shared types.
 - `src/board/board-solver.ts` — the suggested-assignment solver: builds a mixed-integer program
   (via `javascript-lp-solver`) over the open boards and available roster, solved in sequential
-  lexicographic passes (bonus-resource priority, then XP earned, then boards run, then minimizing
-  rank overkill) - each pass locks in the previous one's optimum before optimizing the next tier.
-  Runs inside `board-solver.worker.ts` (a Web Worker) so a hard instance can't freeze the UI; each
-  pass is time-boxed and checked for integrality, falling back to the last fully-valid pass (with
-  a warning) or, if nothing usable was found at all, clearing the suggestions and telling the user
-  to fill that board in manually.
+  lexicographic passes (bonus-resource priority, then XP earned, then boards run, then maximizing
+  the total character power used) - each pass locks in the previous one's optimum before
+  optimizing the next tier. Runs inside `board-solver.worker.ts` (a Web Worker) so a hard instance
+  can't freeze the UI; each pass is time-boxed and checked for integrality, falling back to the
+  last fully-valid pass (with a warning) or, if nothing usable was found at all, clearing the
+  suggestions and telling the user to fill that board in manually.
+- `src/characters/character-power.ts` — computes each character's real in-game power (health,
+  damage, crit/block, ability power, trait/movement modifiers) from a player's raw API response
+  plus a trimmed slice of Snowprint's GameConfig, matching the game's own formula. This is what the
+  solver above uses to rank characters, instead of the coarser `rank` field. See "Updating
+  character-power data" below for how its bundled GameConfig data gets refreshed.
 - `src/board/`, `src/characters/`, `src/rank/`, `src/rarity/`, `src/progression/`, `src/factions/`
   — pure `.ts` logic: decoding raw save-data fields (`progressionIndex`, `rank`, ...) into
   domain enums, resolving game-data ids (traits, damage profiles, factions, portraits, ...) to
   the matching asset URL, and view-model functions that turn raw API data into plain objects
   ready for a component to render.
 - `src/assets/` — game data (`character-data.json`, `ability-data.json`, `mow-data.json`,
-  `operations-data.json` for human-readable operation names) and icon/portrait images, checked
-  into the repo.
+  `operations-data.json` for human-readable operation names, `character-power-*.json` for the
+  power calculator above) and icon/portrait images, checked into the repo.
 
 ### Building and running
 
@@ -88,6 +93,28 @@ builds the native MSI/NSIS installers) and run one of two ways:
 - **Run a workflow manually** from the Actions tab — builds the same way, but creates/updates its
   own separate draft release (tag `app-v<version>`) instead of targeting one you've already
   published.
+
+### Updating character-power data
+
+`src/characters/character-power.ts` computes power from three small JSON files bundled at
+`src/assets/character-power-{units,items,upgrades}.json` — a trimmed slice of Snowprint's
+GameConfig, not the full ~18 MB document. Because the calculation is version-sensitive (it throws
+if the response contains a character the bundled config doesn't know about), these need
+re-extracting whenever a new GameConfig ships, i.e. every game patch:
+
+```sh
+npm run extract-character-power-config -- <path-to-GameConfig.json>
+```
+
+This overwrites the three `src/assets/character-power-*.json` files and prints each one's size —
+worth a glance to make sure nothing ballooned unexpectedly.
+
+**Use the current live/public GameConfig only.** Datamine repos (e.g. `datamine_tacticus`) often
+carry a newer, still-embargoed snapshot alongside the live one — don't extract from whichever
+directory happens to be newest, extract from the one that matches what's actually shipped to
+players. Using an embargoed or otherwise-ahead-of-release config here would both leak unreleased
+content into a checked-in file and quietly compute the wrong power for players still on the live
+build.
 
 ### Credentials
 

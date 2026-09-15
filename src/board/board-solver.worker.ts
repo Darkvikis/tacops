@@ -1,23 +1,25 @@
 import { solveBoardAssignment, type BoardSolution } from "./board-solver";
 import type { ExpeditionBoardEntry, RawUnit } from "../api/types";
-import type { ResourceKey } from "./reward-amount";
+import type { PriorityKey } from "./reward-amount";
 
 export interface SolveRequest {
   requestId: number;
   board: ExpeditionBoardEntry[];
   heroes: RawUnit[];
-  priorityOrder: [ResourceKey, ResourceKey, ResourceKey];
+  priorityOrder: [PriorityKey, PriorityKey, PriorityKey, PriorityKey];
 }
 
 // "status" here is the worker-protocol outcome (did the call throw an unexpected exception);
-// "solveStatus" is solveBoardAssignment's own normal, non-exceptional outcome - "failed" (no
-// viable solution found) is still a "success" at this level, just with an empty assignment.
+// "solveStatus" is solveBoardAssignment's own normal, non-exceptional outcome - "incomplete"
+// means at least one board didn't end up fully assigned (whether the LP degraded, failed
+// entirely, or the greedy fallback couldn't fully solve it), regardless of which path produced
+// it - still a "success" at this level, just with a message worth surfacing.
 export type SolveResponse =
   | {
       requestId: number;
       status: "success";
       assignmentEntries: Array<[string, BoardSolution]>;
-      solveStatus: "ok" | "degraded" | "failed";
+      solveStatus: "ok" | "incomplete";
       message?: string;
     }
   | {
