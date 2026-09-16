@@ -11,29 +11,40 @@ interface TabsProps {
   onChange: (id: string) => void;
 }
 
+const DRAG_THRESHOLD_PX = 6;
+
 export function Tabs({ tabs, active, onChange }: TabsProps) {
   const navRef = useRef<HTMLElement>(null);
-  const dragRef = useRef({ startX: 0, startScrollLeft: 0, moved: false });
+  const dragRef = useRef({ pointerId: -1, startX: 0, startScrollLeft: 0, dragging: false, moved: false });
   const [dragging, setDragging] = useState(false);
 
   const handlePointerDown = (e: PointerEvent<HTMLElement>) => {
     const nav = navRef.current;
     if (!nav) return;
-    dragRef.current = { startX: e.clientX, startScrollLeft: nav.scrollLeft, moved: false };
-    setDragging(true);
-    nav.setPointerCapture(e.pointerId);
+    dragRef.current = { pointerId: e.pointerId, startX: e.clientX, startScrollLeft: nav.scrollLeft, dragging: false, moved: false };
   };
 
   const handlePointerMove = (e: PointerEvent<HTMLElement>) => {
     const nav = navRef.current;
-    if (!nav || !dragging) return;
-    const delta = e.clientX - dragRef.current.startX;
-    if (Math.abs(delta) > 3) dragRef.current.moved = true;
-    nav.scrollLeft = dragRef.current.startScrollLeft - delta;
+    const drag = dragRef.current;
+    if (!nav || drag.pointerId !== e.pointerId) return;
+    const delta = e.clientX - drag.startX;
+    if (!drag.dragging) {
+      if (Math.abs(delta) < DRAG_THRESHOLD_PX) return;
+      drag.dragging = true;
+      drag.moved = true;
+      setDragging(true);
+      nav.setPointerCapture(e.pointerId);
+    }
+    nav.scrollLeft = drag.startScrollLeft - delta;
   };
 
   const handlePointerUp = (e: PointerEvent<HTMLElement>) => {
-    navRef.current?.releasePointerCapture(e.pointerId);
+    const drag = dragRef.current;
+    if (drag.pointerId !== e.pointerId) return;
+    if (drag.dragging) navRef.current?.releasePointerCapture(e.pointerId);
+    drag.dragging = false;
+    drag.pointerId = -1;
     setDragging(false);
   };
 
@@ -60,6 +71,7 @@ export function Tabs({ tabs, active, onChange }: TabsProps) {
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerUp}
       onClickCapture={handleClickCapture}
       onWheel={handleWheel}
       className={`scrollbar-none mt-4 flex w-full select-none gap-1 overflow-x-auto border-b-2 border-black/10 dark:border-white/15 ${
