@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { computeGuildBossTimings, computePvpTimings, computeStaminaTimings, computeWavesTimings } from "./resource-regen";
+import {
+  computeGuildBossTimings,
+  computePvpTimings,
+  computeStaminaTimings,
+  computeSurvivalTimings,
+  computeWavesTimings,
+} from "./resource-regen";
 
 describe("computeStaminaTimings", () => {
   it("computes next/cap using the power-level-indexed cap", () => {
@@ -25,6 +31,22 @@ describe("computeStaminaTimings", () => {
 
   it("returns nulls when the stamina object is missing entirely", () => {
     expect(computeStaminaTimings(undefined, 68)).toEqual({ nextTokenAt: null, capAt: null });
+  });
+});
+
+describe("computeSurvivalTimings", () => {
+  it("computes next/cap from the live event's own maxStamina/regen config", () => {
+    // Real values from a live capture: staminaRegenerationTime is in seconds (43201 -> ~12h).
+    const result = computeSurvivalTimings({ lastUpdatedThreshold: 1_000_000 }, 5, 43_201_000);
+
+    expect(result.nextTokenAt).toBe(1_000_000 + 43_201_000);
+    expect(result.capAt).toBe(1_000_000 + 43_201_000 * 5);
+  });
+
+  it("returns nulls when no seasonal event is live (config undefined)", () => {
+    const result = computeSurvivalTimings({ lastUpdatedThreshold: 1_000_000 }, undefined, undefined);
+
+    expect(result).toEqual({ nextTokenAt: null, capAt: null });
   });
 });
 

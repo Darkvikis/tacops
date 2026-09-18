@@ -5,9 +5,11 @@ import { formatDateTime, urgencyColorClass, DEFAULT_SUBTEXT_CLASS } from "../for
 import {
   guildBossBombIconUrl,
   guildBossIconUrl,
+  heroQuestIconUrl,
   mowAmmoIconUrl,
   pvpIconUrl,
   staminaIconUrl,
+  survivalIconUrl,
   treasureBeachIconUrl,
   wavesIconUrl,
 } from "../resource-icons";
@@ -66,7 +68,14 @@ export function ResourceTokens({ resources, adViewsRemaining }: ResourceTokensPr
       : []),
   ];
 
-  const entries: Array<{ key: string; label: string; icon: string; value: number | string; subtext?: SubtextLine[] }> = [
+  const entries: Array<{
+    key: string;
+    label: string;
+    icon: string;
+    value: number | string;
+    subtext?: SubtextLine[];
+    disabled?: boolean;
+  }> = [
     {
       key: "stamina",
       label: "Stamina",
@@ -107,6 +116,29 @@ export function ResourceTokens({ resources, adViewsRemaining }: ResourceTokensPr
       subtext: regenSubtext(resources.guildBossBombNextTokenAt, resources.guildBossBombCapAt),
     },
     { key: "mowAmmo", label: "Machines of War Ammo", icon: mowAmmoIconUrl(), value: resources.mowAmmo },
+    {
+      key: "heroQuest",
+      label: "Hero Quest",
+      icon: heroQuestIconUrl(),
+      value: resources.heroQuestActive ? resources.heroQuest : "-",
+      subtext: resources.heroQuestActive
+        ? regenSubtext(resources.heroQuestNextTokenAt, resources.heroQuestCapAt)
+        : [{ text: "Quest not running", className: DEFAULT_SUBTEXT_CLASS }],
+      disabled: !resources.heroQuestActive,
+    },
+    // Unlike Hero Quest, Survival is omitted entirely (not grayed out) when no seasonal event is
+    // currently live - there's nothing useful to show at all in that case.
+    ...(resources.survivalActive
+      ? [
+          {
+            key: "survival",
+            label: "Survival",
+            icon: survivalIconUrl(),
+            value: resources.survival,
+            subtext: regenSubtext(resources.survivalNextTokenAt, resources.survivalCapAt),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -114,7 +146,9 @@ export function ResourceTokens({ resources, adViewsRemaining }: ResourceTokensPr
       {entries.map((entry) => (
         <div
           key={entry.key}
-          className="flex h-36 w-44 flex-col items-center gap-1 rounded-lg border border-black/10 bg-white/60 p-2 text-center dark:border-white/15 dark:bg-white/5"
+          className={`flex h-36 w-44 flex-col items-center gap-1 rounded-lg border border-black/10 bg-white/60 p-2 text-center dark:border-white/15 dark:bg-white/5 ${
+            entry.disabled ? "opacity-40" : ""
+          }`}
         >
           <Icon src={entry.icon} title={entry.label} />
           <span className="text-sm font-medium">{entry.value}</span>

@@ -4,11 +4,14 @@ import { fetchWithTimeout } from "./fetch-with-timeout";
 import characterData from "../assets/character-data.json";
 import mowData from "../assets/mow-data.json";
 import { calculateBundledUnitPowers } from "../characters/character-power";
+import { computeHeroQuestJars, type HeroQuestJar } from "../hero-quests/hero-quest-view-model";
 import {
   computeGuildBossBombTimings,
   computeGuildBossTimings,
+  computeHeroQuestTimings,
   computePvpTimings,
   computeStaminaTimings,
+  computeSurvivalTimings,
   computeTreasureBeachTimings,
   computeWavesTimings,
 } from "./resource-regen";
@@ -27,6 +30,7 @@ export interface PlayerData {
   machinesOfWar: RawUnit[];
   adViewsRemaining: number;
   resources: PlayerResources;
+  heroQuestJars: HeroQuestJar[];
   // The untouched GET_PLAYER envelope, kept around only so it can be exported as-is.
   raw: unknown;
 }
@@ -88,6 +92,25 @@ export async function fetchPlayerData(
     hero?.progress?.pvpState?.stamina,
     hero?.progress?.pvpState?.staminaRegenUntil ?? null,
   );
+  // The LHE's liveEventConfigId (e.g. "linear_hero_event_2") increments per event iteration, so
+  // it's matched by module type instead of a hardcoded id. Absent entirely when no LHE is live.
+  const lheModule = hero?.liveEvents?.liveEvents
+    ?.find((e: any) => e?.modules?.some((m: any) => m.type === "linearHeroEvent"))
+    ?.modules?.find((m: any) => m.type === "linearHeroEvent")?.module;
+  const heroQuestTimings = computeHeroQuestTimings(lheModule?.stamina);
+  // The seasonal event's liveEventConfigId (e.g. "season_september_2026_event") rolls over monthly
+  // like the LHE's does, so it's matched by module type instead. Its stamina/config live in a
+  // separate staminaEventModule sibling of the "survival" module within the same live event.
+  const survivalStaminaModule = hero?.liveEvents?.liveEvents
+    ?.find((e: any) => e?.modules?.some((m: any) => m.type === "survival"))
+    ?.modules?.find((m: any) => m.type === "staminaEventModule")?.module;
+  const survivalTimings = computeSurvivalTimings(
+    survivalStaminaModule?.stamina,
+    survivalStaminaModule?.staminaConfig?.maxStamina,
+    survivalStaminaModule?.staminaConfig?.staminaRegenerationTime !== undefined
+      ? survivalStaminaModule.staminaConfig.staminaRegenerationTime * 1000
+      : undefined,
+  );
 
   // "currentAmount" is omitted entirely (rather than sent as 0) when a regenerating resource is
   // actually at 0, so every one of these needs a fallback rather than trusting the field's presence.
@@ -118,6 +141,14 @@ export async function fetchPlayerData(
     guildBossBombNextTokenAt: guildBossBombTimings.nextTokenAt,
     guildBossBombCapAt: guildBossBombTimings.capAt,
     mowAmmo: hero?.resources?.groupedCurrencies?.global?.machinesOfWarAmmo ?? 0,
+    heroQuest: lheModule?.stamina?.currentAmount ?? 0,
+    heroQuestNextTokenAt: heroQuestTimings.nextTokenAt,
+    heroQuestCapAt: heroQuestTimings.capAt,
+    heroQuestActive: lheModule !== undefined,
+    survival: survivalStaminaModule?.stamina?.currentAmount ?? 0,
+    survivalNextTokenAt: survivalTimings.nextTokenAt,
+    survivalCapAt: survivalTimings.capAt,
+    survivalActive: survivalStaminaModule !== undefined,
   };
 
   return {
@@ -128,6 +159,7 @@ export async function fetchPlayerData(
     // - in which case the daily allotment (7) hasn't been drawn down at all.
     adViewsRemaining: hero?.player?.adViews?.currentAmount ?? 7,
     resources,
+    heroQuestJars: computeHeroQuestJars(hero?.loot?.urnOfBalls),
     raw: response,
   };
 }

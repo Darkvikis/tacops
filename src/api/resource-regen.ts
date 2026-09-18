@@ -35,6 +35,11 @@ const GUILD_BOSS_BOMB_REGEN_MS = 43_200_000; // 12 h/point
 export const PVP_MAX = 15; // exported so ResourceTokens.tsx can label the "no more regen" state
 const PVP_REGEN_MS = 9_600_000; // 2h40m/point (normal ticking rate; see computePvpTimings for the pause)
 
+// Not in any datamine config (same situation as treasureBeach/guildBoss above) - confirmed
+// directly from the user's own game knowledge.
+const HERO_QUEST_MAX = 6;
+const HERO_QUEST_REGEN_MS = 7_200_000; // 2h/point
+
 export interface StaminaShaped {
   // Omitted entirely (not sent as 0) by the API when a resource is actually at 0 - same convention
   // already documented in fetch-player-data.ts for the flat currentAmount reads.
@@ -63,11 +68,27 @@ export function computeStaminaTimings(stamina: StaminaShaped | undefined, powerL
   return computeTimings(stamina, STAMINA_MAX_BY_POWER_LEVEL[index], STAMINA_REGEN_MS);
 }
 
+// Unlike the other resources here, Survival's max/regen rate is sent live in the event payload
+// itself (staminaEventModule.staminaConfig) rather than needing to be reverse-engineered, so it's
+// read dynamically each fetch instead of hardcoded - and is undefined entirely when no seasonal
+// event is currently running.
+export function computeSurvivalTimings(
+  stamina: StaminaShaped | undefined,
+  maxStamina: number | undefined,
+  regenMsPerPoint: number | undefined,
+): RegenTimings {
+  if (maxStamina === undefined || regenMsPerPoint === undefined) return { nextTokenAt: null, capAt: null };
+  return computeTimings(stamina, maxStamina, regenMsPerPoint);
+}
+
 export function computeWavesTimings(stamina: StaminaShaped | undefined): RegenTimings {
   return computeTimings(stamina, WAVES_MAX, WAVES_REGEN_MS);
 }
 export function computeTreasureBeachTimings(stamina: StaminaShaped | undefined): RegenTimings {
   return computeTimings(stamina, TREASURE_BEACH_MAX, TREASURE_BEACH_REGEN_MS);
+}
+export function computeHeroQuestTimings(stamina: StaminaShaped | undefined): RegenTimings {
+  return computeTimings(stamina, HERO_QUEST_MAX, HERO_QUEST_REGEN_MS);
 }
 export function computeGuildBossBombTimings(stamina: StaminaShaped | undefined): RegenTimings {
   return computeTimings(stamina, GUILD_BOSS_BOMB_MAX, GUILD_BOSS_BOMB_REGEN_MS);
