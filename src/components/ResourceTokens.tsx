@@ -9,6 +9,7 @@ import {
   mowAmmoIconUrl,
   pvpIconUrl,
   staminaIconUrl,
+  survivalIconUrl,
   treasureBeachIconUrl,
   wavesIconUrl,
 } from "../resource-icons";
@@ -125,6 +126,19 @@ export function ResourceTokens({ resources, adViewsRemaining }: ResourceTokensPr
         : [{ text: "Quest not running", className: DEFAULT_SUBTEXT_CLASS }],
       disabled: !resources.heroQuestActive,
     },
+    // Unlike Hero Quest, Survival is omitted entirely (not grayed out) when no seasonal event is
+    // currently live - there's nothing useful to show at all in that case.
+    ...(resources.survivalActive
+      ? [
+          {
+            key: "survival",
+            label: "Survival",
+            icon: survivalIconUrl(),
+            value: resources.survival,
+            subtext: regenSubtext(resources.survivalNextTokenAt, resources.survivalCapAt),
+          },
+        ]
+      : []),
   ];
 
   return (

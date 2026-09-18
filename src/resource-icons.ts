@@ -29,3 +29,7 @@ export function mowAmmoIconUrl(): string {
 export function heroQuestIconUrl(): string {
   return new URL("./assets/resources/ui_icon_resource_token_lhe.png", import.meta.url).href;
 }
+
+export function survivalIconUrl(): string {
+  return new URL("./assets/resources/ui_icon_resource_token_battle_seasonal_event.png", import.meta.url).href;
+}

@@ -68,6 +68,19 @@ export function computeStaminaTimings(stamina: StaminaShaped | undefined, powerL
   return computeTimings(stamina, STAMINA_MAX_BY_POWER_LEVEL[index], STAMINA_REGEN_MS);
 }
 
+// Unlike the other resources here, Survival's max/regen rate is sent live in the event payload
+// itself (staminaEventModule.staminaConfig) rather than needing to be reverse-engineered, so it's
+// read dynamically each fetch instead of hardcoded - and is undefined entirely when no seasonal
+// event is currently running.
+export function computeSurvivalTimings(
+  stamina: StaminaShaped | undefined,
+  maxStamina: number | undefined,
+  regenMsPerPoint: number | undefined,
+): RegenTimings {
+  if (maxStamina === undefined || regenMsPerPoint === undefined) return { nextTokenAt: null, capAt: null };
+  return computeTimings(stamina, maxStamina, regenMsPerPoint);
+}
+
 export function computeWavesTimings(stamina: StaminaShaped | undefined): RegenTimings {
   return computeTimings(stamina, WAVES_MAX, WAVES_REGEN_MS);
 }
