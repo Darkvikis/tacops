@@ -5,9 +5,10 @@ import md5 from "js-md5";
 
 // Confirmed via real Proxyman captures: the actual game client reuses this exact trio unchanged
 // across APP_START, CONNECT, and GET_PLAYER in the same session - not re-derived per call. Same
-// values on both prod and QA.
-const GAME_CONFIG_VERSION = "f92fb06ae9c02542bb3f520fc562f709";
-const MULTI_CONFIG_VERSION = "897f8de5439de707acaf6b3add1eeba3";
+// values on both prod and QA. Refreshed 2026-09-18 from a fresh prod capture (only prod - QA's
+// value is assumed unchanged, not independently reconfirmed this time).
+const GAME_CONFIG_VERSION = "39544f90b23c604016f7549b4561719a";
+const MULTI_CONFIG_VERSION = "baa3abeef58d35f24dfb0ee70b15f130";
 const INSTALL_ID = "scraper-installid";
 
 interface EnvironmentConfig {
@@ -31,7 +32,8 @@ const PROD_CONFIG: EnvironmentConfig = {
   environmentId: "live-loki",
   bundleId: "com.snowprintstudios.tacticus",
   jenkinsBuildBranchInfo: "release",
-  builtInMultiConfigVersion: "f34892307c9d4727869adf53f3afa446",
+  // Refreshed 2026-09-18 from a fresh prod capture.
+  builtInMultiConfigVersion: "70bbe6c887f27cd4143ced37954a1fad",
 };
 
 // gameEventBaseUrl here is derived by analogy with prod (same api-staging host, same

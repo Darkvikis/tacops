@@ -4,9 +4,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 // Confirmed via real Proxyman captures: the actual game client reuses this exact trio unchanged
 // across APP_START, CONNECT, and GET_PLAYER in the same session - not re-derived per call. Same
-// values on both prod and QA.
-pub(crate) const GAME_CONFIG_VERSION: &str = "f92fb06ae9c02542bb3f520fc562f709";
-pub(crate) const MULTI_CONFIG_VERSION: &str = "897f8de5439de707acaf6b3add1eeba3";
+// values on both prod and QA. Refreshed 2026-09-18 from a fresh prod capture (only prod - QA's
+// value is assumed unchanged, not independently reconfirmed this time).
+pub(crate) const GAME_CONFIG_VERSION: &str = "39544f90b23c604016f7549b4561719a";
+pub(crate) const MULTI_CONFIG_VERSION: &str = "baa3abeef58d35f24dfb0ee70b15f130";
 pub(crate) const INSTALL_ID: &str = "scraper-installid";
 
 // The fields below this line come straight from a real captured QA CONNECT request and differ
@@ -38,7 +39,8 @@ const PROD_CONFIG: EnvironmentConfig = EnvironmentConfig {
     environment_id: "live-loki",
     bundle_id: "com.snowprintstudios.tacticus",
     jenkins_build_branch_info: "release",
-    built_in_multi_config_version: "f34892307c9d4727869adf53f3afa446",
+    // Refreshed 2026-09-18 from a fresh prod capture.
+    built_in_multi_config_version: "70bbe6c887f27cd4143ced37954a1fad",
 };
 
 // game_event_base_url here is derived by analogy with prod (same api-staging host, same
