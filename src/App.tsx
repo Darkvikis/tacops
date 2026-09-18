@@ -12,6 +12,7 @@ import { MowTable } from "./components/MowTable";
 import { GuildChatTab } from "./components/GuildChatTab";
 import { BoardCoverageTab } from "./components/BoardCoverageTab";
 import { CrusadeTab } from "./components/CrusadeTab";
+import { HeroQuestsTab } from "./components/HeroQuestsTab";
 import { RewardPriorityPicker } from "./components/RewardPriorityPicker";
 import { RequiredCharacterPool } from "./components/RequiredCharacterPool";
 import { ResourceTokens } from "./components/ResourceTokens";
@@ -24,6 +25,7 @@ import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
 import type { PriorityKey } from "./board/reward-amount";
 import type { CrusadeData, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlayerResources, RawUnit } from "./api/types";
+import type { HeroQuestJar } from "./hero-quests/hero-quest-view-model";
 
 const TABS = [
   { id: "operations", label: "Operations" },
@@ -32,6 +34,7 @@ const TABS = [
   { id: "characters", label: "Characters" },
   { id: "mows", label: "Machines of War" },
   { id: "coverage", label: "Board Coverage" },
+  { id: "heroquests", label: "Hero Quests" },
 ];
 
 const FETCH_COUNTDOWN_SECONDS = 60;
@@ -57,6 +60,7 @@ export function App() {
   const [machinesOfWar, setMachinesOfWar] = useState<RawUnit[]>([]);
   const [adViewsRemaining, setAdViewsRemaining] = useState<number | null>(null);
   const [resources, setResources] = useState<PlayerResources | null>(null);
+  const [heroQuestJars, setHeroQuestJars] = useState<HeroQuestJar[]>([]);
   const [rawPlayerData, setRawPlayerData] = useState<unknown>(null);
   const [crusadeData, setCrusadeData] = useState<CrusadeData | null>(null);
   const [planetLeaderboards, setPlanetLeaderboards] = useState<PlanetLeaderboard[]>([]);
@@ -217,6 +221,7 @@ export function App() {
       setMachinesOfWar(data.machinesOfWar);
       setAdViewsRemaining(data.adViewsRemaining);
       setResources(data.resources);
+      setHeroQuestJars(data.heroQuestJars);
       setRawPlayerData(data.raw);
       setFetchState("success");
       if (!isTauri()) {
@@ -451,6 +456,7 @@ export function App() {
             {activeTab === "mows" && <MowTable machinesOfWar={machinesOfWar} />}
             {activeTab === "guildchat" && <GuildChatTab environment={environment} />}
             {activeTab === "coverage" && <BoardCoverageTab />}
+            {activeTab === "heroquests" && <HeroQuestsTab jars={heroQuestJars} />}
             {activeTab === "crusade" && (
               <CrusadeTab
                 crusadeData={crusadeData}

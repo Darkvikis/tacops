@@ -140,4 +140,10 @@ export interface PlayerResources {
   guildBossBombNextTokenAt: number | null;
   guildBossBombCapAt: number | null;
   mowAmmo: number;
+  heroQuest: number;
+  heroQuestNextTokenAt: number | null;
+  heroQuestCapAt: number | null;
+  // False when no Linear Hero Event is currently live (module absent from liveEvents) - distinct
+  // from the event running with stamina genuinely at 0.
+  heroQuestActive: boolean;
 }

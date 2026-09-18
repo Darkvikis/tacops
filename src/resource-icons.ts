@@ -25,3 +25,7 @@ export function guildBossBombIconUrl(): string {
 export function mowAmmoIconUrl(): string {
   return new URL("./assets/resources/ui_icon_resource_machines_of_war_ammo_large.png", import.meta.url).href;
 }
+
+export function heroQuestIconUrl(): string {
+  return new URL("./assets/resources/ui_icon_resource_token_lhe.png", import.meta.url).href;
+}
