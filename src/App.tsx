@@ -26,7 +26,7 @@ import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
 import type { PriorityKey } from "./board/reward-amount";
-import type { CrusadeData, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlayerResources, RawUnit } from "./api/types";
+import type { CrusadeData, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlayerResources, RawUnit } from "./api/types";
 import type { HeroQuestJar } from "./hero-quests/hero-quest-view-model";
 
 const TABS = [
@@ -63,6 +63,7 @@ export function App() {
   const [adViewsRemaining, setAdViewsRemaining] = useState<number | null>(null);
   const [resources, setResources] = useState<PlayerResources | null>(null);
   const [heroQuestJars, setHeroQuestJars] = useState<HeroQuestJar[]>([]);
+  const [sectorMap, setSectorMap] = useState<CrusadeSectorMap>({ planets: [], connections: [] });
   const [rawPlayerData, setRawPlayerData] = useState<unknown>(null);
   const [crusadeData, setCrusadeData] = useState<CrusadeData | null>(null);
   const [planetLeaderboards, setPlanetLeaderboards] = useState<PlanetLeaderboard[]>([]);
@@ -232,6 +233,7 @@ export function App() {
       setAdViewsRemaining(data.adViewsRemaining);
       setResources(data.resources);
       setHeroQuestJars(data.heroQuestJars);
+      setSectorMap(data.sectorMap);
       setRawPlayerData(data.raw);
       setFetchState("success");
       if (!isTauri()) {
@@ -472,6 +474,7 @@ export function App() {
               <CrusadeTab
                 crusadeData={crusadeData}
                 planetLeaderboards={planetLeaderboards}
+                sectorMap={sectorMap}
                 error={crusadeError}
                 loadingProgress={crusadeProgress}
                 viewMode={viewMode}
