@@ -7,14 +7,16 @@ const cellClass = "border-b border-black/10 px-3 py-2 align-top dark:border-whit
 interface CrusadeDominationTableProps {
   planets: CrusadePlanet[];
   leaderboardByPlanet: Map<string, PlanetLeaderboard>;
+  onSelectPlanet: (planetId: string) => void;
 }
 
-export function CrusadeDominationTable({ planets, leaderboardByPlanet }: CrusadeDominationTableProps) {
+export function CrusadeDominationTable({ planets, leaderboardByPlanet, onSelectPlanet }: CrusadeDominationTableProps) {
   return (
     <table className="mt-4 w-full table-auto border-collapse text-left">
       <thead>
         <tr>
           <th className={cellClass}>Planet</th>
+          <th className={cellClass}>Sector</th>
           <th className={cellClass}>Owner</th>
           <th className={cellClass}>Imperial</th>
           <th className={cellClass}>Devastation</th>
@@ -29,8 +31,13 @@ export function CrusadeDominationTable({ planets, leaderboardByPlanet }: Crusade
           const captureRace = computeCaptureRace(planet);
           const ranked = isPlanetRanked(leaderboard);
           return (
-            <tr key={planet.planetId} className={ranked ? "bg-blue-50 dark:bg-blue-950/30" : undefined}>
+            <tr
+              key={planet.planetId}
+              onClick={() => onSelectPlanet(planet.planetId)}
+              className={`cursor-pointer ${ranked ? "bg-blue-50 dark:bg-blue-950/30" : ""}`}
+            >
               <td className={cellClass}>{planet.name}</td>
+              <td className={cellClass}>{(planet.zone ?? 0) + 1}</td>
               <td className={cellClass}>{planet.ownedByFaction && <FactionBadge factionId={planet.ownedByFaction} />}</td>
               <td className={cellClass}>
                 {progress && (

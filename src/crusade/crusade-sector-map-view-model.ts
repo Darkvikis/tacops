@@ -1,0 +1,69 @@
+import type { CrusadePlanet, CrusadeSectorMap } from "../api/types";
+
+export type SectorMapColor = "imperial" | "devastation" | "neutral";
+
+export interface SectorMapNode {
+  planetId: string;
+  name: string;
+  type: string;
+  x: number; // normalized [0,1] within this sector's own bounding box
+  y: number;
+  color: SectorMapColor;
+}
+
+export interface SectorMapEdge {
+  from: SectorMapNode;
+  to: SectorMapNode;
+}
+
+export interface SectorMapData {
+  zone: number;
+  nodes: SectorMapNode[];
+  edges: SectorMapEdge[];
+}
+
+function normalize(value: number, min: number, max: number): number {
+  return max > min ? (value - min) / (max - min) : 0.5;
+}
+
+function colorFor(sideOwner: string | undefined): SectorMapColor {
+  if (sideOwner?.toLowerCase() === "for") return "imperial";
+  if (sideOwner?.toLowerCase() === "against") return "devastation";
+  return "neutral";
+}
+
+export function computeSectorMap(zone: number, sectorMap: CrusadeSectorMap, crusadePlanets: CrusadePlanet[]): SectorMapData {
+  const crusadePlanetById = new Map(crusadePlanets.map((p) => [p.planetId, p]));
+  const zonePlanets = sectorMap.planets.filter((p) => p.zone === zone);
+
+  const xs = zonePlanets.map((p) => p.positionX);
+  const ys = zonePlanets.map((p) => p.positionY);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+
+  const nodeById = new Map<string, SectorMapNode>();
+  for (const p of zonePlanets) {
+    const crusadePlanet = crusadePlanetById.get(p.planetId);
+    nodeById.set(p.planetId, {
+      planetId: p.planetId,
+      name: crusadePlanet?.name ?? p.planetId,
+      type: p.type,
+      x: normalize(p.positionX, minX, maxX),
+      y: normalize(p.positionY, minY, maxY),
+      color: colorFor(crusadePlanet?.sideOwner),
+    });
+  }
+
+  const edges: SectorMapEdge[] = [];
+  for (const c of sectorMap.connections) {
+    const from = nodeById.get(c.planet1);
+    const to = nodeById.get(c.planet2);
+    // Both ends must be in this zone - connections crossing sector boundaries have nowhere to
+    // draw their other end on a single sector's map, so they're dropped rather than half-drawn.
+    if (from && to) edges.push({ from, to });
+  }
+
+  return { zone, nodes: [...nodeById.values()], edges };
+}
