@@ -9,6 +9,12 @@ const host = process.env.TAURI_DEV_HOST;
 export default defineConfig(async () => ({
   plugins: [react(), tailwindcss()],
 
+  // Epoch ms at build time (or dev-server start) - a rough version proxy shown in the corner of
+  // the page (see BuildTimestamp.tsx). Declared in src/vite-env.d.ts.
+  define: {
+    __BUILD_TIME__: Date.now(),
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
