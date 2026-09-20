@@ -12,6 +12,7 @@ dist
 dist-ssr
 src-tauri/target/
 .wrangler
+.dev.vars
 *.local
 
 # Editor directories and files

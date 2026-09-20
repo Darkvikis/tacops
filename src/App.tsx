@@ -16,10 +16,12 @@ import { HeroQuestsTab } from "./components/HeroQuestsTab";
 import { RewardPriorityPicker } from "./components/RewardPriorityPicker";
 import { RequiredCharacterPool } from "./components/RequiredCharacterPool";
 import { ResourceTokens } from "./components/ResourceTokens";
+import { BuildTimestamp } from "./components/BuildTimestamp";
 import { fetchPlayerData } from "./api/fetch-player-data";
 import { entryIsUnavailable } from "./board/board-view-model";
 import { activePlanetIds, fetchCrusadeData, fetchLeaderboardData } from "./api/fetch-crusade-data";
 import { storeWebCredential } from "./api/store-web-credential";
+import { fetchTakedownScreenEnabled } from "./api/fetch-app-config";
 import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
@@ -133,6 +135,14 @@ export function App() {
     const request: SolveRequest = { requestId, board, heroes, priorityOrder };
     worker.postMessage(request);
   }, [board, heroes, priorityOrder]);
+
+  // Env-controlled takedown gate: only ever flips devModeEnabled on early (skipping the screen),
+  // never back off - the 8x gesture still works as a manual fallback either way.
+  useEffect(() => {
+    fetchTakedownScreenEnabled().then((enabled) => {
+      if (!enabled) setDevModeEnabled(true);
+    });
+  }, []);
 
   function toggleDevMode() {
     setDevModeEnabled((current) => {
@@ -307,6 +317,7 @@ export function App() {
       onClick={() => setSelectedExpeditionId(null)}
       className="mx-auto flex min-h-screen w-full flex-col items-center bg-neutral-100 px-4 py-[5vh] text-center text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
     >
+      <BuildTimestamp />
       <h1 className="cursor-pointer text-2xl font-semibold select-none" onClick={handleTitleTap}>
         TacOps
       </h1>

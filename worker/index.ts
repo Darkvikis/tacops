@@ -4,6 +4,7 @@ import { renderInsightsPage } from "./insights";
 
 interface Env {
   DB: D1Database;
+  SHOW_TAKEDOWN_SCREEN?: string;
 }
 
 interface RequestBody {
@@ -67,6 +68,10 @@ export default {
       } catch (error) {
         return Response.json({ error: `${error}` }, { status: 502 });
       }
+    }
+
+    if (url.pathname === "/api/config" && request.method === "GET") {
+      return Response.json({ showTakedownScreen: env.SHOW_TAKEDOWN_SCREEN === "true" });
     }
 
     if (url.pathname === "/api/track" && request.method === "POST") {
