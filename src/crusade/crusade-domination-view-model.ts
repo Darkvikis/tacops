@@ -37,8 +37,21 @@ export function isPlanetRanked(leaderboard: PlanetLeaderboard | undefined): bool
   return leaderboard?.side?.myRank != null || leaderboard?.faction?.myRank != null;
 }
 
-function factionTenthBenchmarkPoints(leaderboard: PlanetLeaderboard | undefined): number {
-  return leaderboard?.faction?.benchmarks.find((b) => b.rank === 10)?.points ?? Infinity;
+export interface CaptureRace {
+  leadingSide: "Imperial" | "Devastation";
+  pointsRemaining: number;
+}
+
+// Whichever side is closer to hitting its own conquest threshold - a low pointsRemaining means the
+// planet is about to flip, which is exactly the kind of planet worth piling points onto.
+export function computeCaptureRace(planet: CrusadePlanet): CaptureRace | null {
+  const progress = computeConquestProgress(planet);
+  if (!progress) return null;
+  const imperialRemaining = progress.imperialThreshold - progress.imperialCurrent;
+  const devastationRemaining = progress.devastationThreshold - progress.devastationCurrent;
+  return imperialRemaining <= devastationRemaining
+    ? { leadingSide: "Imperial", pointsRemaining: imperialRemaining }
+    : { leadingSide: "Devastation", pointsRemaining: devastationRemaining };
 }
 
 function factionParticipants(leaderboard: PlanetLeaderboard | undefined): number {
@@ -53,9 +66,9 @@ function factionPercentile(leaderboard: PlanetLeaderboard | undefined): number {
 }
 
 // Two-group sort: planets where the player has a faction rank come first (best percentile first -
-// "how am I already doing here"); the rest follow, ordered by how low the bar to crack the
-// faction's #10 is (easiest opportunities first), tie-broken by how few faction participants
-// they're competing against.
+// "how am I already doing here"); the rest follow, ordered by how close the nearer side is to
+// actually capturing the planet (fewest points remaining first - the most urgent/actionable
+// opportunities), tie-broken by how few faction participants they're competing against.
 export function sortDominationPlanets(planets: CrusadePlanet[], leaderboardByPlanet: Map<string, PlanetLeaderboard>): CrusadePlanet[] {
   const ranked: CrusadePlanet[] = [];
   const unranked: CrusadePlanet[] = [];
@@ -67,14 +80,12 @@ export function sortDominationPlanets(planets: CrusadePlanet[], leaderboardByPla
   ranked.sort((a, b) => factionPercentile(leaderboardByPlanet.get(a.planetId)) - factionPercentile(leaderboardByPlanet.get(b.planetId)));
 
   unranked.sort((a, b) => {
-    const lbA = leaderboardByPlanet.get(a.planetId);
-    const lbB = leaderboardByPlanet.get(b.planetId);
-    // Both sides missing a #10 benchmark means Infinity - Infinity (NaN), not a tie of 0 - guard
+    // Both sides missing struggleData means Infinity - Infinity (NaN), not a tie of 0 - guard
     // explicitly rather than relying on subtraction, then fall through to the participant tiebreak.
-    const tenthA = factionTenthBenchmarkPoints(lbA);
-    const tenthB = factionTenthBenchmarkPoints(lbB);
-    if (tenthA !== tenthB) return tenthA - tenthB;
-    return factionParticipants(lbA) - factionParticipants(lbB);
+    const remainingA = computeCaptureRace(a)?.pointsRemaining ?? Infinity;
+    const remainingB = computeCaptureRace(b)?.pointsRemaining ?? Infinity;
+    if (remainingA !== remainingB) return remainingA - remainingB;
+    return factionParticipants(leaderboardByPlanet.get(a.planetId)) - factionParticipants(leaderboardByPlanet.get(b.planetId));
   });
 
   return [...ranked, ...unranked];

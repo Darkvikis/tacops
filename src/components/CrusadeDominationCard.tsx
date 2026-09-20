@@ -1,11 +1,12 @@
 import { FactionBadge, LeaderboardBreakdownCell } from "./crusade-cells";
-import { computeConquestProgress, isPlanetRanked } from "../crusade/crusade-domination-view-model";
+import { computeCaptureRace, computeConquestProgress, isPlanetRanked } from "../crusade/crusade-domination-view-model";
 import type { CrusadePlanet, PlanetLeaderboard } from "../api/types";
 
 const labelClass = "text-xs font-medium opacity-70";
 
 export function CrusadeDominationCard({ planet, leaderboard }: { planet: CrusadePlanet; leaderboard?: PlanetLeaderboard }) {
   const progress = computeConquestProgress(planet);
+  const captureRace = computeCaptureRace(planet);
   const ranked = isPlanetRanked(leaderboard);
 
   return (
@@ -26,6 +27,11 @@ export function CrusadeDominationCard({ planet, leaderboard }: { planet: Crusade
           <span>
             Devastation: {progress.devastationCurrent.toLocaleString()} / {progress.devastationThreshold.toLocaleString()} ({progress.devastationPercent}%)
           </span>
+          {captureRace && (
+            <span className="font-bold italic">
+              {captureRace.pointsRemaining.toLocaleString()} points from capture ({captureRace.leadingSide})
+            </span>
+          )}
         </div>
       )}
       <div className="grid grid-cols-2 gap-2">

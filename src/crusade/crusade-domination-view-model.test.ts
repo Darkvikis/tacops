@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { computeConquestProgress, isPlanetRanked, sortDominationPlanets } from "./crusade-domination-view-model";
+import { computeCaptureRace, computeConquestProgress, isPlanetRanked, sortDominationPlanets } from "./crusade-domination-view-model";
 import type { CrusadePlanet, PlanetLeaderboard } from "../api/types";
 
 function planet(overrides: Partial<CrusadePlanet> = {}): CrusadePlanet {
@@ -58,6 +58,34 @@ describe("computeConquestProgress", () => {
   });
 });
 
+describe("computeCaptureRace", () => {
+  it("returns null when the planet has no struggleData", () => {
+    expect(computeCaptureRace(planet())).toBeNull();
+  });
+
+  it("picks Imperial as the leading side when they need fewer points to capture", () => {
+    const p = planet({
+      sideOwner: "Against",
+      pointsFor: 90,
+      pointsAgainst: 10,
+      struggleData: { conquestThresholdPointsAttacker: 100, conquestThresholdPointsDefender: 100 },
+    });
+    // Imperial (attacker here) needs 100-90=10 more; Devastation (defender) needs 100-10=90 more.
+    expect(computeCaptureRace(p)).toEqual({ leadingSide: "Imperial", pointsRemaining: 10 });
+  });
+
+  it("picks Devastation as the leading side when they need fewer points to capture", () => {
+    const p = planet({
+      sideOwner: "For",
+      pointsFor: 10,
+      pointsAgainst: 90,
+      struggleData: { conquestThresholdPointsAttacker: 100, conquestThresholdPointsDefender: 100 },
+    });
+    // Devastation (attacker here) needs 100-90=10 more; Imperial (defender) needs 100-10=90 more.
+    expect(computeCaptureRace(p)).toEqual({ leadingSide: "Devastation", pointsRemaining: 10 });
+  });
+});
+
 describe("isPlanetRanked", () => {
   it("is true when the player has a side rank", () => {
     expect(isPlanetRanked(leaderboard({ side: { numParticipants: 10, myRank: 3, myPoints: 100, benchmarks: [], referenceScore: null } }))).toBe(true);
@@ -86,17 +114,19 @@ describe("sortDominationPlanets", () => {
     expect(sortDominationPlanets(planets, byPlanet).map((p) => p.planetId)).toEqual(["better", "worse"]);
   });
 
-  it("sorts unranked planets after ranked ones, ascending by the faction's #10 benchmark", () => {
-    const planets = [planet({ planetId: "ranked" }), planet({ planetId: "hard" }), planet({ planetId: "easy" })];
+  it("sorts unranked planets after ranked ones, ascending by points remaining for the closest side to capture", () => {
+    const planets = [
+      planet({ planetId: "ranked" }),
+      planet({ planetId: "hard", sideOwner: "For", pointsFor: 100, pointsAgainst: 100, struggleData: { conquestThresholdPointsAttacker: 10000, conquestThresholdPointsDefender: 10000 } }),
+      planet({ planetId: "easy", sideOwner: "For", pointsFor: 100, pointsAgainst: 9900, struggleData: { conquestThresholdPointsAttacker: 10000, conquestThresholdPointsDefender: 10000 } }),
+    ];
     const byPlanet = new Map<string, PlanetLeaderboard>([
       ["ranked", leaderboard({ planetId: "ranked", faction: { numParticipants: 100, myRank: 5, myPoints: 1, benchmarks: [], referenceScore: null } })],
-      ["hard", leaderboard({ planetId: "hard", faction: { numParticipants: 100, myRank: null, myPoints: null, benchmarks: [{ rank: 10, points: 9000 }], referenceScore: null } })],
-      ["easy", leaderboard({ planetId: "easy", faction: { numParticipants: 100, myRank: null, myPoints: null, benchmarks: [{ rank: 10, points: 100 }], referenceScore: null } })],
     ]);
     expect(sortDominationPlanets(planets, byPlanet).map((p) => p.planetId)).toEqual(["ranked", "easy", "hard"]);
   });
 
-  it("tie-breaks equal #10 thresholds (or both missing) by ascending faction participant count", () => {
+  it("tie-breaks equal points-remaining (or both missing struggleData) by ascending faction participant count", () => {
     const planets = [planet({ planetId: "crowded" }), planet({ planetId: "sparse" })];
     const byPlanet = new Map<string, PlanetLeaderboard>([
       ["crowded", leaderboard({ planetId: "crowded", faction: { numParticipants: 500, myRank: null, myPoints: null, benchmarks: [], referenceScore: null } })],
