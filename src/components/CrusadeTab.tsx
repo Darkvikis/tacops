@@ -1,6 +1,9 @@
 import { Spinner } from "./Spinner";
 import { CrusadePlanetsTable } from "./CrusadePlanetsTable";
 import { CrusadePlanetsCards } from "./CrusadePlanetsCards";
+import { CrusadeDominationCards } from "./CrusadeDominationCards";
+import { CrusadeDominationTable } from "./CrusadeDominationTable";
+import { sortDominationPlanets } from "../crusade/crusade-domination-view-model";
 import type { ViewMode } from "./ViewModeToggle";
 import type { CrusadeData, PlanetLeaderboard } from "../api/types";
 
@@ -22,11 +25,37 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, error, loadingProg
       <p>No crusade data loaded.</p>
     );
   }
+  const leaderboardByPlanet = new Map(planetLeaderboards.map((l) => [l.planetId, l]));
+
+  if (crusadeData.phase === "STRUGGLE") {
+    // Domination phase: every planet is contestable at once (no zone filter), ordered by
+    // opportunity - see sortDominationPlanets.
+    const dominationPlanets = sortDominationPlanets(
+      crusadeData.planets.filter((p) => leaderboardByPlanet.has(p.planetId)),
+      leaderboardByPlanet,
+    );
+    if (dominationPlanets.length === 0) {
+      return loadingProgress ? (
+        <p className="inline-flex items-center gap-2">
+          <Spinner />
+          {loadingProgress.phase === "side" ? "Loading crusade data..." : "Loading faction rankings..."}{" "}
+          {loadingProgress.done}/{loadingProgress.total} planets
+        </p>
+      ) : (
+        <p>No planet data loaded yet.</p>
+      );
+    }
+    return viewMode === "table" ? (
+      <CrusadeDominationTable planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} />
+    ) : (
+      <CrusadeDominationCards planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} />
+    );
+  }
+
   if (crusadeData.activeZone === null) {
     return <p>No crusade zone is currently active (between phases).</p>;
   }
 
-  const leaderboardByPlanet = new Map(planetLeaderboards.map((l) => [l.planetId, l]));
   // Ascending by Faction Leaderboard reference score - a rough "how competitive is this planet"
   // signal (see fetch-crusade-data.ts's pickReferenceScore). Planets with no score yet (still
   // loading, or genuinely no faction leaderboard data) sort last rather than being dropped.

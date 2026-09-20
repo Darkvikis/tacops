@@ -29,7 +29,7 @@ export async function fetchCrusadeData(
     : await fetchWithTimeout<any>("/api/fetch-crusade-data", { environment, ...webCredentials, snowId: "" }, 60_000);
 
   const data = response?.eventResults?.[0]?.eventResponseData;
-  const activeZone = findActiveZone(data?.crusadePhases ?? []);
+  const { phase, activeZone } = findActivePhase(data?.downtimePhase, data?.crusadePhases ?? [], data?.strugglePhase);
 
   return {
     crusadeId: data?.crusadeId ?? "",
@@ -40,6 +40,7 @@ export async function fetchCrusadeData(
     playerTargetPlanetId: data?.playerTargetPlanetId ?? null,
     guildTargetPlanetId: data?.guildTargetPlanetId ?? null,
     activeZone,
+    phase,
     planets: (data?.planetsData ?? []).map((p: any) => ({
       planetId: p.planetId,
       name: planetNameById.get(p.planetId) ?? p.planetId,
@@ -47,20 +48,38 @@ export async function fetchCrusadeData(
       ownedByFaction: p.ownedByFaction,
       pointsFor: p.pointsFor,
       pointsAgainst: p.pointsAgainst,
+      struggleData: p.struggleData,
     })),
   };
 }
 
-// crusadePhases labels its zones "zone1".."zone6" (1-based) - planet-data.json's zone field is
-// 0-based, matching the underlying game data it was extracted from - so this converts between
-// the two. Only one phase should ever bracket "now" (the schedule is contiguous, non-overlapping)
-// - during DOWNTIME/STRUGGLE, no CRUSADE-phase entry brackets it and there's no active zone.
-function findActiveZone(phases: { phase: string; zone?: string; startsOn: number; endsOn: number }[]): number | null {
+interface RawCrusadePhase {
+  phase: string;
+  zone?: string;
+  startsOn: number;
+  endsOn: number;
+}
+
+// The three phase-schedule pieces GET_CRUSADE returns: one downtimePhase, one crusadePhases entry
+// per zone ("CRUSADE", zone1..zone6, 1-based - planet-data.json's zone field is 0-based, matching
+// the underlying game data it was extracted from, hence the -1 below), and one strugglePhase (the
+// Domination phase, no zone - contests every planet at once). Only one should ever bracket "now"
+// (the schedule is contiguous, non-overlapping).
+export function findActivePhase(
+  downtimePhase: RawCrusadePhase | undefined,
+  crusadePhases: RawCrusadePhase[],
+  strugglePhase: RawCrusadePhase | undefined,
+): { phase: "CRUSADE" | "STRUGGLE" | "DOWNTIME" | null; activeZone: number | null } {
   const now = Date.now();
-  const active = phases.find((p) => p.phase === "CRUSADE" && p.zone && now >= p.startsOn && now < p.endsOn);
-  if (!active?.zone) return null;
+  const allPhases = [downtimePhase, ...crusadePhases, strugglePhase].filter((p): p is RawCrusadePhase => p !== undefined);
+  const active = allPhases.find((p) => now >= p.startsOn && now < p.endsOn);
+  if (!active) return { phase: null, activeZone: null };
+
+  if (active.phase !== "CRUSADE" || !active.zone) {
+    return { phase: active.phase as "CRUSADE" | "STRUGGLE" | "DOWNTIME", activeZone: null };
+  }
   const oneBased = parseInt(active.zone.replace("zone", ""), 10);
-  return Number.isNaN(oneBased) ? null : oneBased - 1;
+  return { phase: "CRUSADE", activeZone: Number.isNaN(oneBased) ? null : oneBased - 1 };
 }
 
 // Only planet-data.json's static zone assignment tells us which planets are contested *this*
@@ -107,12 +126,16 @@ function parseRows(rows: any): LeaderboardRow[] {
 // no numParticipants/topEntries, indistinguishable at a glance from a genuinely empty
 // leaderboard. Requiring numParticipants here is what actually distinguishes "no entry" (a typo)
 // from "entry exists, player just isn't on it" (a real absence).
-function readLeaderboard(leaderboards: any, leaderboardId: string): RawLeaderboardEntry | null {
+export function readLeaderboard(leaderboards: any, leaderboardId: string): RawLeaderboardEntry | null {
   const entry = leaderboards?.[leaderboardId];
   if (!entry || typeof entry.numParticipants !== "number") return null;
   return {
     numParticipants: entry.numParticipants,
-    myRank: entry.myRank ?? null,
+    // Confirmed by the user: myRank comes back 0-based from the API (unlike topEntries[].position,
+    // which is also 0-based but already handled correctly via `position === rank - 1` in
+    // buildBenchmarks) - +1 here so the displayed rank matches the #1/#10/#25 benchmarks it's
+    // compared against.
+    myRank: entry.myRank != null ? entry.myRank + 1 : null,
     myPoints: entry.myPoints ?? null,
     topEntries: parseRows(entry.topEntries),
     localEntries: parseRows(entry.localEntries),

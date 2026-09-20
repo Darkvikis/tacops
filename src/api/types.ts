@@ -41,6 +41,15 @@ export interface CrusadePhase {
   endsOn: number;
 }
 
+export interface CrusadeStruggleData {
+  conquestThresholdPointsAttacker: number;
+  conquestThresholdPointsDefender: number;
+  // True for planets still inside the ~8h post-expansion lockout, before they become targetable
+  // again in the Domination/STRUGGLE phase - recaptureTimestamp is when that lockout ends.
+  isExpansionCooldown?: boolean;
+  recaptureTimestamp?: number;
+}
+
 export interface CrusadePlanet {
   planetId: string;
   name: string;
@@ -48,6 +57,7 @@ export interface CrusadePlanet {
   ownedByFaction?: string;
   pointsFor?: number;
   pointsAgainst?: number;
+  struggleData?: CrusadeStruggleData;
 }
 
 export interface CrusadeData {
@@ -58,9 +68,13 @@ export interface CrusadeData {
   againstFactionId: string;
   playerTargetPlanetId: string | null;
   guildTargetPlanetId: string | null;
-  // 0-based, derived from crusadePhases - null if no phase brackets the current time (e.g. mid
-  // DOWNTIME/STRUGGLE, when no zone is actively contested).
+  // 0-based, derived from crusadePhases - only meaningful when phase is "CRUSADE".
   activeZone: number | null;
+  // Which of the schedule's phases currently brackets "now" - null if none does. "CRUSADE" means
+  // the classic per-zone Expansion display (activeZone set); "STRUGGLE" is the all-map Domination
+  // phase (activeZone irrelevant - every planet is contestable at once); "DOWNTIME" is the
+  // pre-season gap.
+  phase: "CRUSADE" | "STRUGGLE" | "DOWNTIME" | null;
   planets: CrusadePlanet[];
 }
 

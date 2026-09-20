@@ -8,7 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "worker:dev": "vite build && wrangler dev",
+    "worker:dev": "concurrently -k -n build,worker -c yellow,blue \"vite build --watch\" \"wrangler dev\"",
     "test": "vitest run"
   },
   "dependencies": {
@@ -27,6 +27,7 @@
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.4",
     "@vitejs/plugin-react": "^4.7.0",
+    "concurrently": "^10.0.5",
     "tailwindcss": "^4.3.3",
     "typescript": "~5.6.2",
     "vite": "^6.0.3",

@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { buildFactionLeaderboard, findOwnFactionId, mergeSideLeaderboard, pickReferenceScore } from "./fetch-crusade-data";
+import {
+  buildFactionLeaderboard,
+  findActivePhase,
+  findOwnFactionId,
+  mergeSideLeaderboard,
+  pickReferenceScore,
+  readLeaderboard,
+} from "./fetch-crusade-data";
 
 // Points taken from a real captured GET_LEADERBOARD_2 response (planet_041, crusadePlayer
 // "_against" leaderboard) - the player (myRank 53) doesn't place in the top 25 shown here,
@@ -145,6 +152,46 @@ describe("buildFactionLeaderboard", () => {
 
   it("returns null for a null entry", () => {
     expect(buildFactionLeaderboard(noEntry)).toBeNull();
+  });
+});
+
+describe("readLeaderboard", () => {
+  it("converts the API's 0-based myRank to a 1-based display rank", () => {
+    const leaderboards = { "some:id": { numParticipants: 10, myRank: 0, myPoints: 500, topEntries: [], localEntries: [] } };
+    expect(readLeaderboard(leaderboards, "some:id")?.myRank).toBe(1);
+  });
+
+  it("leaves a null myRank (not ranked) alone", () => {
+    const leaderboards = { "some:id": { numParticipants: 10, myRank: null, myPoints: null, topEntries: [], localEntries: [] } };
+    expect(readLeaderboard(leaderboards, "some:id")?.myRank).toBeNull();
+  });
+
+  it("returns null when the leaderboard id isn't present at all (typo'd id prefix)", () => {
+    expect(readLeaderboard({}, "missing:id")).toBeNull();
+  });
+});
+
+describe("findActivePhase", () => {
+  it("resolves whichever phase actually brackets now, not just the first CRUSADE entry", () => {
+    const realNow = Date.now();
+    const phasesAroundNow = [{ phase: "CRUSADE", zone: "zone5", startsOn: realNow - 1000, endsOn: realNow + 1000 }];
+    expect(findActivePhase(undefined, phasesAroundNow, undefined)).toEqual({ phase: "CRUSADE", activeZone: 4 });
+  });
+
+  it("returns STRUGGLE with a null activeZone (Domination has no zone)", () => {
+    const realNow = Date.now();
+    const struggleAroundNow = { phase: "STRUGGLE", startsOn: realNow - 1000, endsOn: realNow + 1000 };
+    expect(findActivePhase(undefined, [], struggleAroundNow)).toEqual({ phase: "STRUGGLE", activeZone: null });
+  });
+
+  it("returns DOWNTIME with a null activeZone", () => {
+    const realNow = Date.now();
+    const downtimeAroundNow = { phase: "DOWNTIME", startsOn: realNow - 1000, endsOn: realNow + 1000 };
+    expect(findActivePhase(downtimeAroundNow, [], undefined)).toEqual({ phase: "DOWNTIME", activeZone: null });
+  });
+
+  it("returns null phase when nothing brackets now (all inputs undefined/empty)", () => {
+    expect(findActivePhase(undefined, [], undefined)).toEqual({ phase: null, activeZone: null });
   });
 });
 
