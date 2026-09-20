@@ -255,7 +255,9 @@ export function App() {
     }
 
     try {
-      const planetIds = activePlanetIds(crusade.activeZone);
+      // During Domination (STRUGGLE) every planet is contestable at once - no zone filter, unlike
+      // the classic per-zone Expansion (CRUSADE) phase.
+      const planetIds = crusade.phase === "STRUGGLE" ? crusade.planets.map((p) => p.planetId) : activePlanetIds(crusade.activeZone);
       if (planetIds.length > 0) {
         setCrusadeProgress({ done: 0, total: planetIds.length, phase: "side" });
         const leaderboards = await fetchLeaderboardData(
