@@ -8,4 +8,4 @@ directory = "./dist"
 [[d1_databases]]
 binding = "DB"
 database_name = "tacops-analytics"
-database_id = "d5bea7cc-5bf3-461b-a056-97e1a3b1eaa2"
+database_id = "b4e3ef6f-68c4-4622-b12b-93c90dc4c196"
