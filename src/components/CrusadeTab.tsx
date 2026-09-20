@@ -2,6 +2,7 @@ import { Spinner } from "./Spinner";
 import { CrusadePlanetsTable } from "./CrusadePlanetsTable";
 import { CrusadePlanetsCards } from "./CrusadePlanetsCards";
 import { CrusadeDominationCards } from "./CrusadeDominationCards";
+import { CrusadeDominationTable } from "./CrusadeDominationTable";
 import { sortDominationPlanets } from "../crusade/crusade-domination-view-model";
 import type { ViewMode } from "./ViewModeToggle";
 import type { CrusadeData, PlanetLeaderboard } from "../api/types";
@@ -44,7 +45,11 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, error, loadingProg
         <p>No planet data loaded yet.</p>
       );
     }
-    return <CrusadeDominationCards planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} />;
+    return viewMode === "table" ? (
+      <CrusadeDominationTable planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} />
+    ) : (
+      <CrusadeDominationCards planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} />
+    );
   }
 
   if (crusadeData.activeZone === null) {
