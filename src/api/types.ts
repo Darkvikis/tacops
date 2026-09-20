@@ -58,6 +58,30 @@ export interface CrusadePlanet {
   pointsFor?: number;
   pointsAgainst?: number;
   struggleData?: CrusadeStruggleData;
+  // 0-based sector/zone this planet belongs to, from the static planet-data.json - null only if a
+  // planet id somehow isn't in that file.
+  zone: number | null;
+}
+
+// Map-layout data for one planet, as it appears in the sector map - separate from CrusadePlanet
+// (ownership/points) because this comes from a different source (GET_PLAYER's embedded
+// crusadeEvent live-event module, not the dedicated GET_CRUSADE call - see fetch-player-data.ts).
+export interface CrusadeSectorPlanet {
+  planetId: string;
+  zone: number; // 0-based
+  type: string; // "Fortress" | "Civilized" | "Dead" | "Hive" | "Feral" | "NotPlayable" ("Sun" excluded)
+  positionX: number;
+  positionY: number;
+}
+
+export interface CrusadeConnection {
+  planet1: string;
+  planet2: string;
+}
+
+export interface CrusadeSectorMap {
+  planets: CrusadeSectorPlanet[];
+  connections: CrusadeConnection[];
 }
 
 export interface CrusadeData {

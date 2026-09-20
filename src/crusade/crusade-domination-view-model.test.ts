@@ -3,7 +3,7 @@ import { computeCaptureRace, computeConquestProgress, isPlanetRanked, sortDomina
 import type { CrusadePlanet, PlanetLeaderboard } from "../api/types";
 
 function planet(overrides: Partial<CrusadePlanet> = {}): CrusadePlanet {
-  return { planetId: "planet_001", name: "Test Planet", ...overrides };
+  return { planetId: "planet_001", name: "Test Planet", zone: null, ...overrides };
 }
 
 function leaderboard(overrides: Partial<PlanetLeaderboard> = {}): PlanetLeaderboard {

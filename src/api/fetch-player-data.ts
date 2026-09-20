@@ -15,7 +15,7 @@ import {
   computeTreasureBeachTimings,
   computeWavesTimings,
 } from "./resource-regen";
-import type { Credentials, Environment, ExpeditionBoardEntry, PlayerResources, RawUnit } from "./types";
+import type { Credentials, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlayerResources, RawUnit } from "./types";
 
 const characterIds = new Set((characterData as { id: string }[]).map((c) => c.id));
 const mowIds = new Set((mowData as { mows: { snowprintId: string }[] }).mows.map((m) => m.snowprintId));
@@ -31,6 +31,7 @@ export interface PlayerData {
   adViewsRemaining: number;
   resources: PlayerResources;
   heroQuestJars: HeroQuestJar[];
+  sectorMap: CrusadeSectorMap;
   // The untouched GET_PLAYER envelope, kept around only so it can be exported as-is.
   raw: unknown;
 }
@@ -151,6 +152,28 @@ export async function fetchPlayerData(
     survivalActive: survivalStaminaModule !== undefined,
   };
 
+  // The map layout (positions/adjacency) isn't in the dedicated GET_CRUSADE call
+  // (fetch-crusade-data.ts) - confirmed via a real capture it's simply absent there. It only shows
+  // up here, in GET_PLAYER's own embedded copy of the crusade live event.
+  const crusadeEventModule = hero?.liveEvents?.liveEvents
+    ?.find((e: any) => e?.modules?.some((m: any) => m.type === "crusadeEvent"))
+    ?.modules?.find((m: any) => m.type === "crusadeEvent")?.module;
+  const sectorMap: CrusadeSectorMap = {
+    planets: (crusadeEventModule?.planetsConfig?.planets ?? [])
+      .filter((p: any) => p.type !== "Sun")
+      .map((p: any) => ({
+        planetId: p.planetId,
+        zone: parseInt(p.zone.replace("zone", ""), 10) - 1,
+        type: p.type,
+        positionX: p.positionX ?? 0,
+        positionY: p.positionY ?? 0,
+      })),
+    connections: (crusadeEventModule?.planetsConfig?.connections ?? []).map((c: any) => ({
+      planet1: c.planet1,
+      planet2: c.planet2,
+    })),
+  };
+
   return {
     board,
     heroes: units.filter((u) => characterIds.has(u.id)),
@@ -160,6 +183,7 @@ export async function fetchPlayerData(
     adViewsRemaining: hero?.player?.adViews?.currentAmount ?? 7,
     resources,
     heroQuestJars: computeHeroQuestJars(hero?.loot?.urnOfBalls),
+    sectorMap,
     raw: response,
   };
 }

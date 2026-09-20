@@ -14,6 +14,7 @@ import type {
 } from "./types";
 
 const planetNameById = new Map((planetData as { planetId: string; name: string }[]).map((p) => [p.planetId, p.name]));
+const planetZoneById = new Map((planetData as { planetId: string; zone: number }[]).map((p) => [p.planetId, p.zone]));
 
 // Both transports replay APP_START -> CONNECT -> GET_CRUSADE server-side, each individually
 // bounded at 20s - same reasoning as fetchPlayerData's timeout.
@@ -49,6 +50,7 @@ export async function fetchCrusadeData(
       pointsFor: p.pointsFor,
       pointsAgainst: p.pointsAgainst,
       struggleData: p.struggleData,
+      zone: planetZoneById.get(p.planetId) ?? null,
     })),
   };
 }

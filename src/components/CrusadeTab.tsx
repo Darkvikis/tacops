@@ -1,21 +1,27 @@
+import { useState } from "react";
 import { Spinner } from "./Spinner";
 import { CrusadePlanetsTable } from "./CrusadePlanetsTable";
 import { CrusadePlanetsCards } from "./CrusadePlanetsCards";
 import { CrusadeDominationCards } from "./CrusadeDominationCards";
 import { CrusadeDominationTable } from "./CrusadeDominationTable";
+import { PlanetSectorMapModal } from "./PlanetSectorMapModal";
 import { sortDominationPlanets } from "../crusade/crusade-domination-view-model";
+import { computeSectorMap } from "../crusade/crusade-sector-map-view-model";
 import type { ViewMode } from "./ViewModeToggle";
-import type { CrusadeData, PlanetLeaderboard } from "../api/types";
+import type { CrusadeData, CrusadeSectorMap, PlanetLeaderboard } from "../api/types";
 
 interface CrusadeTabProps {
   crusadeData: CrusadeData | null;
   planetLeaderboards: PlanetLeaderboard[];
+  sectorMap: CrusadeSectorMap;
   error: string | null;
   loadingProgress: { done: number; total: number; phase: "side" | "faction" } | null;
   viewMode: ViewMode;
 }
 
-export function CrusadeTab({ crusadeData, planetLeaderboards, error, loadingProgress, viewMode }: CrusadeTabProps) {
+export function CrusadeTab({ crusadeData, planetLeaderboards, sectorMap, error, loadingProgress, viewMode }: CrusadeTabProps) {
+  const [selectedPlanetId, setSelectedPlanetId] = useState<string | null>(null);
+
   if (!crusadeData) {
     return error ? (
       <pre className="mt-4 w-full overflow-x-auto whitespace-pre-wrap rounded border border-red-400 bg-red-50 p-3 text-left text-sm text-red-700 dark:border-red-600 dark:bg-red-950/40 dark:text-red-400">
@@ -26,6 +32,18 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, error, loadingProg
     );
   }
   const leaderboardByPlanet = new Map(planetLeaderboards.map((l) => [l.planetId, l]));
+
+  const selectedPlanetZone = selectedPlanetId
+    ? (crusadeData.planets.find((p) => p.planetId === selectedPlanetId)?.zone ?? null)
+    : null;
+  const sectorMapModal =
+    selectedPlanetId !== null && selectedPlanetZone !== null ? (
+      <PlanetSectorMapModal
+        sectorMapData={computeSectorMap(selectedPlanetZone, sectorMap, crusadeData.planets)}
+        highlightPlanetId={selectedPlanetId}
+        onClose={() => setSelectedPlanetId(null)}
+      />
+    ) : null;
 
   if (crusadeData.phase === "STRUGGLE") {
     // Domination phase: every planet is contestable at once (no zone filter), ordered by
@@ -45,10 +63,15 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, error, loadingProg
         <p>No planet data loaded yet.</p>
       );
     }
-    return viewMode === "table" ? (
-      <CrusadeDominationTable planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} />
-    ) : (
-      <CrusadeDominationCards planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} />
+    return (
+      <>
+        {viewMode === "table" ? (
+          <CrusadeDominationTable planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} onSelectPlanet={setSelectedPlanetId} />
+        ) : (
+          <CrusadeDominationCards planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} onSelectPlanet={setSelectedPlanetId} />
+        )}
+        {sectorMapModal}
+      </>
     );
   }
 

@@ -4,14 +4,21 @@ import type { CrusadePlanet, PlanetLeaderboard } from "../api/types";
 
 const labelClass = "text-xs font-medium opacity-70";
 
-export function CrusadeDominationCard({ planet, leaderboard }: { planet: CrusadePlanet; leaderboard?: PlanetLeaderboard }) {
+interface CrusadeDominationCardProps {
+  planet: CrusadePlanet;
+  leaderboard?: PlanetLeaderboard;
+  onSelectPlanet: (planetId: string) => void;
+}
+
+export function CrusadeDominationCard({ planet, leaderboard, onSelectPlanet }: CrusadeDominationCardProps) {
   const progress = computeConquestProgress(planet);
   const captureRace = computeCaptureRace(planet);
   const ranked = isPlanetRanked(leaderboard);
 
   return (
     <div
-      className={`flex flex-col gap-2 rounded-lg border bg-white/60 p-3 text-left dark:bg-white/5 ${
+      onClick={() => onSelectPlanet(planet.planetId)}
+      className={`flex cursor-pointer flex-col gap-2 rounded-lg border bg-white/60 p-3 text-left dark:bg-white/5 ${
         ranked ? "border-2 border-blue-500 dark:border-blue-400" : "border-black/10 dark:border-white/15"
       }`}
     >
@@ -19,6 +26,7 @@ export function CrusadeDominationCard({ planet, leaderboard }: { planet: Crusade
         <span className="font-medium">{planet.name}</span>
         {planet.ownedByFaction && <FactionBadge factionId={planet.ownedByFaction} />}
       </div>
+      <span className="text-xs opacity-70">Sector {(planet.zone ?? 0) + 1}</span>
       {progress && (
         <div className="flex flex-col gap-0.5 text-sm">
           <span>
