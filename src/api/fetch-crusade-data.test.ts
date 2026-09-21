@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import {
   buildFactionLeaderboard,
   findActivePhase,
-  findOwnFactionId,
   mergeSideLeaderboard,
   pickReferenceScore,
   readLeaderboard,
+  resolveMyFactionId,
 } from "./fetch-crusade-data";
 
 // Points taken from a real captured GET_LEADERBOARD_2 response (planet_041, crusadePlayer
@@ -101,18 +101,17 @@ describe("mergeSideLeaderboard", () => {
   });
 });
 
-describe("findOwnFactionId", () => {
-  it("finds the player's own factionId in localEntries when they don't place in topEntries", () => {
-    const factionId = findOwnFactionId(realAgainstEntry, "a4f01b7c-bfd5-431b-aa9c-9e22eb00e6fa");
-    expect(factionId).toBe("WorldEaters");
+describe("resolveMyFactionId", () => {
+  it("returns forFactionId when chosenSide is For", () => {
+    expect(resolveMyFactionId({ chosenSide: "For", forFactionId: "Custodes", againstFactionId: "WorldEaters" })).toBe("Custodes");
   });
 
-  it("returns null when the player's id doesn't appear anywhere in the entry", () => {
-    expect(findOwnFactionId(realAgainstEntry, "not-a-real-user-id")).toBeNull();
+  it("returns againstFactionId when chosenSide is Against", () => {
+    expect(resolveMyFactionId({ chosenSide: "Against", forFactionId: "Custodes", againstFactionId: "WorldEaters" })).toBe("WorldEaters");
   });
 
-  it("returns null for a null entry", () => {
-    expect(findOwnFactionId(noEntry, "a4f01b7c-bfd5-431b-aa9c-9e22eb00e6fa")).toBeNull();
+  it("matches chosenSide case-insensitively", () => {
+    expect(resolveMyFactionId({ chosenSide: "against", forFactionId: "Custodes", againstFactionId: "WorldEaters" })).toBe("WorldEaters");
   });
 });
 
@@ -152,6 +151,28 @@ describe("buildFactionLeaderboard", () => {
 
   it("returns null for a null entry", () => {
     expect(buildFactionLeaderboard(noEntry)).toBeNull();
+  });
+
+  it("falls back to raw top entries when too few participants exist for the standard benchmark ranks", () => {
+    // 3 participants - only rank 1 (position 0) would land on a standard benchmark rank, so
+    // showing just that one row would throw away positions 1 and 2 even though they're right
+    // there in topEntries. All three should show instead.
+    const tiny = {
+      numParticipants: 3,
+      myRank: null,
+      myPoints: null,
+      topEntries: [
+        { position: 0, points: 900 },
+        { position: 1, points: 700 },
+        { position: 2, points: 500 },
+      ],
+      localEntries: [],
+    };
+    expect(buildFactionLeaderboard(tiny)?.benchmarks).toEqual([
+      { rank: 1, points: 900 },
+      { rank: 2, points: 700 },
+      { rank: 3, points: 500 },
+    ]);
   });
 });
 

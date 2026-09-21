@@ -92,6 +92,16 @@ export function activePlanetIds(activeZone: number | null): string[] {
   return (planetData as { planetId: string; zone: number }[]).filter((p) => p.zone === activeZone).map((p) => p.planetId);
 }
 
+// A player picks a side (chosenSide) but is independently pre-assigned one faction on EACH side
+// (forFactionId/againstFactionId), so they always have something to play regardless of which side
+// their guild ultimately commits to - "my faction" for this crusade season is simply whichever of
+// the two matches chosenSide, available the moment GET_CRUSADE responds. No personal leaderboard
+// rank is needed to determine it (unlike the old findOwnFactionId heuristic this replaced, which
+// failed whenever the player had no rank on any currently-active planet).
+export function resolveMyFactionId(crusadeData: Pick<CrusadeData, "chosenSide" | "forFactionId" | "againstFactionId">): string {
+  return crusadeData.chosenSide.toLowerCase() === "for" ? crusadeData.forFactionId : crusadeData.againstFactionId;
+}
+
 function leaderboardIdsForPlanet(crusadeId: string, seasonNumber: number, planetId: string) {
   const base = `${crusadeId}_${seasonNumber}_${planetId}`;
   return {
@@ -115,8 +125,7 @@ interface RawLeaderboardEntry {
   myPoints: number | null;
   topEntries: LeaderboardRow[];
   // Entries surrounding the player's own rank - present when myRank doesn't place in the top 25
-  // shown by topEntries. This is the only place we've confirmed the player's own factionId
-  // appears (see findOwnFactionId).
+  // shown by topEntries.
   localEntries: LeaderboardRow[];
 }
 
@@ -144,15 +153,6 @@ export function readLeaderboard(leaderboards: any, leaderboardId: string): RawLe
   };
 }
 
-// The player's own factionId isn't exposed anywhere else already-fetched - it only shows up on
-// the player's own row within a "side" (_players) leaderboard's topEntries/localEntries. Faction
-// membership is an account-level identity, not per-planet, so the caller only needs to find this
-// once across all planets, not per-planet.
-export function findOwnFactionId(entry: RawLeaderboardEntry | null, myUserId: string): string | null {
-  const row = [...(entry?.topEntries ?? []), ...(entry?.localEntries ?? [])].find((r) => r.participantId === myUserId);
-  return row?.factionId ?? null;
-}
-
 function topFactionStandings(entry: RawLeaderboardEntry | null): CrusadeFactionStanding[] {
   return (entry?.topEntries ?? []).filter((e) => e.factionId).map((e) => ({ factionId: e.factionId!, points: e.points }));
 }
@@ -170,11 +170,21 @@ function pickMine(forEntry: RawLeaderboardEntry | null, againstEntry: RawLeaderb
   return null;
 }
 
+const MAX_FALLBACK_BENCHMARK_ROWS = 5;
+
 function buildBenchmarks(entry: RawLeaderboardEntry): LeaderboardBenchmark[] {
-  return BENCHMARK_RANKS.filter((rank) => entry.topEntries.some((e) => e.position === rank - 1)).map((rank) => ({
+  const benchmarkRows = BENCHMARK_RANKS.filter((rank) => entry.topEntries.some((e) => e.position === rank - 1)).map((rank) => ({
     rank,
     points: entry.topEntries.find((e) => e.position === rank - 1)!.points,
   }));
+  if (benchmarkRows.length > 1) return benchmarkRows;
+
+  // Too few participants for #1/#5/#10/#25 to be meaningful (at most one matched) - show
+  // whatever top entries actually exist instead of an almost-empty (or entirely empty) list.
+  return [...entry.topEntries]
+    .sort((a, b) => a.position - b.position)
+    .slice(0, MAX_FALLBACK_BENCHMARK_ROWS)
+    .map((e) => ({ rank: e.position + 1, points: e.points }));
 }
 
 // chosenSide is only consulted as a fallback - when the player has no personal rank on either
@@ -237,19 +247,6 @@ export function buildFactionLeaderboard(entry: RawLeaderboardEntry | null): Fact
   };
 }
 
-async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
-  const results: R[] = new Array(items.length);
-  let next = 0;
-  async function worker() {
-    while (next < items.length) {
-      const i = next++;
-      results[i] = await fn(items[i]);
-    }
-  }
-  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
-  return results;
-}
-
 async function fetchLeaderboards(
   environment: Environment,
   credentials: { userId: string; clientSecret: string; snowId: string },
@@ -261,63 +258,47 @@ async function fetchLeaderboards(
   return response?.eventResult?.eventResponseData?.leaderboards;
 }
 
-export async function fetchLeaderboardData(
+// Single-planet replacement for the old all-planets-at-once fetchLeaderboardData - called
+// repeatedly (initial load, rolling auto-refresh, manual refresh) by App.tsx's scheduler, one
+// planet at a time, so each planet's card/row can update independently instead of the whole tab
+// blocking until every planet finishes.
+export async function fetchPlanetLeaderboard(
   environment: Environment,
   crusadeId: string,
   seasonNumber: number,
   chosenSide: string,
-  planetIds: string[],
+  planetId: string,
+  myFactionId: string,
   webCredentials?: { userId: string; clientSecret: string },
-  onProgress?: (done: number, total: number, phase: "side" | "faction") => void,
-): Promise<PlanetLeaderboard[]> {
+): Promise<PlanetLeaderboard> {
   const credentials = isTauri()
     ? await invokeWithTimeout<Credentials>("find_credentials", { environment }, 20_000)
     : { userId: webCredentials?.userId ?? "", clientSecret: webCredentials?.clientSecret ?? "", snowId: "" };
 
-  // Phase A: side + aggregate-faction data for every active planet, same as before. Also
-  // collects whichever planet's side leaderboard reveals the player's own factionId - needed to
-  // build phase B's query, and only derivable from this data (see findOwnFactionId).
-  let doneA = 0;
-  let myFactionId: string | null = null;
-  const partials = await mapWithConcurrency(planetIds, 5, async (planetId) => {
-    const ids = leaderboardIdsForPlanet(crusadeId, seasonNumber, planetId);
-    const leaderboardIds = [ids.factionFor, ids.factionAgainst, ids.playerFor, ids.playerAgainst];
-    const leaderboards = await fetchLeaderboards(environment, credentials, leaderboardIds);
+  const ids = leaderboardIdsForPlanet(crusadeId, seasonNumber, planetId);
+  const sideLeaderboards = await fetchLeaderboards(environment, credentials, [ids.factionFor, ids.factionAgainst, ids.playerFor, ids.playerAgainst]);
 
-    const factionFor = readLeaderboard(leaderboards, ids.factionFor);
-    const factionAgainst = readLeaderboard(leaderboards, ids.factionAgainst);
-    const playerFor = readLeaderboard(leaderboards, ids.playerFor);
-    const playerAgainst = readLeaderboard(leaderboards, ids.playerAgainst);
+  const factionFor = readLeaderboard(sideLeaderboards, ids.factionFor);
+  const factionAgainst = readLeaderboard(sideLeaderboards, ids.factionAgainst);
+  const playerFor = readLeaderboard(sideLeaderboards, ids.playerFor);
+  const playerAgainst = readLeaderboard(sideLeaderboards, ids.playerAgainst);
 
-    if (myFactionId === null) {
-      myFactionId = findOwnFactionId(playerFor, credentials.userId) ?? findOwnFactionId(playerAgainst, credentials.userId);
-    }
+  // myFactionId comes from resolveMyFactionId (GET_CRUSADE's chosenSide/forFactionId/
+  // againstFactionId) - always known up front, so this only skips as a defensive no-op if
+  // GET_CRUSADE ever omits those fields (fetchCrusadeData defaults them to "").
+  let faction: FactionLeaderboardResult | null = null;
+  if (myFactionId) {
+    const base = `${crusadeId}_${seasonNumber}_${planetId}`;
+    const factionLeaderboardId = `crusadePlayer:crusade_leaderboard_planet_faction_players_${base}_${myFactionId}`;
+    const factionLeaderboards = await fetchLeaderboards(environment, credentials, [factionLeaderboardId]);
+    faction = buildFactionLeaderboard(readLeaderboard(factionLeaderboards, factionLeaderboardId));
+  }
 
-    doneA++;
-    onProgress?.(doneA, planetIds.length, "side");
-    return {
-      planetId,
-      topFactionsFor: topFactionStandings(factionFor),
-      topFactionsAgainst: topFactionStandings(factionAgainst),
-      side: mergeSideLeaderboard(playerFor, playerAgainst, chosenSide),
-    };
-  });
-
-  // Phase B: now that we (maybe) know the player's own faction, one follow-up query per planet
-  // against that faction's own leaderboard - skipped entirely if the player has no side-leaderboard
-  // position on any active-zone planet this refresh (myFactionId stays null).
-  let doneB = 0;
-  const factionResults = myFactionId
-    ? await mapWithConcurrency(planetIds, 5, async (planetId) => {
-        const base = `${crusadeId}_${seasonNumber}_${planetId}`;
-        const leaderboardId = `crusadePlayer:crusade_leaderboard_planet_faction_players_${base}_${myFactionId}`;
-        const leaderboards = await fetchLeaderboards(environment, credentials, [leaderboardId]);
-        const result = buildFactionLeaderboard(readLeaderboard(leaderboards, leaderboardId));
-        doneB++;
-        onProgress?.(doneB, planetIds.length, "faction");
-        return result;
-      })
-    : planetIds.map(() => null);
-
-  return partials.map((partial, i) => ({ ...partial, faction: factionResults[i] }));
+  return {
+    planetId,
+    topFactionsFor: topFactionStandings(factionFor),
+    topFactionsAgainst: topFactionStandings(factionAgainst),
+    side: mergeSideLeaderboard(playerFor, playerAgainst, chosenSide),
+    faction,
+  };
 }
