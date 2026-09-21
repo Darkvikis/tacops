@@ -51,7 +51,9 @@ export function computeSectorMap(zone: number, sectorMap: CrusadeSectorMap, crus
       name: crusadePlanet?.name ?? p.planetId,
       type: p.type,
       x: normalize(p.positionX, minX, maxX),
-      y: normalize(p.positionY, minY, maxY),
+      // Inverted: the game's positionY increases upward, but SVG y increases downward - without
+      // this, the rendered sector map is upside down relative to the in-game map.
+      y: 1 - normalize(p.positionY, minY, maxY),
       color: colorFor(crusadePlanet?.sideOwner),
     });
   }

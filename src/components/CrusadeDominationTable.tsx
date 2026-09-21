@@ -1,16 +1,21 @@
 import { FactionBadge, LeaderboardBreakdownCell } from "./crusade-cells";
+import { PlanetFetchTimestamp } from "./PlanetFetchTimestamp";
+import { RefreshIconButton } from "./RefreshIconButton";
+import { Spinner } from "./Spinner";
+import { EMPTY_REFRESH_ENTRY } from "./planet-refresh-defaults";
 import { computeCaptureRace, computeConquestProgress, isPlanetRanked } from "../crusade/crusade-domination-view-model";
-import type { CrusadePlanet, PlanetLeaderboard } from "../api/types";
+import type { CrusadePlanet, PlanetRefreshEntry } from "../api/types";
 
 const cellClass = "border-b border-black/10 px-3 py-2 align-top dark:border-white/15";
 
 interface CrusadeDominationTableProps {
   planets: CrusadePlanet[];
-  leaderboardByPlanet: Map<string, PlanetLeaderboard>;
+  planetRefreshState: Map<string, PlanetRefreshEntry>;
   onSelectPlanet: (planetId: string) => void;
+  onRefreshPlanet: (planetId: string) => void;
 }
 
-export function CrusadeDominationTable({ planets, leaderboardByPlanet, onSelectPlanet }: CrusadeDominationTableProps) {
+export function CrusadeDominationTable({ planets, planetRefreshState, onSelectPlanet, onRefreshPlanet }: CrusadeDominationTableProps) {
   return (
     <table className="mt-4 w-full table-auto border-collapse text-left">
       <thead>
@@ -22,11 +27,13 @@ export function CrusadeDominationTable({ planets, leaderboardByPlanet, onSelectP
           <th className={cellClass}>Devastation</th>
           <th className={cellClass}>Side Leaderboard</th>
           <th className={cellClass}>Faction Leaderboard</th>
+          <th className={cellClass}>Fetched</th>
         </tr>
       </thead>
       <tbody>
         {planets.map((planet) => {
-          const leaderboard = leaderboardByPlanet.get(planet.planetId);
+          const refreshEntry = planetRefreshState.get(planet.planetId) ?? EMPTY_REFRESH_ENTRY;
+          const leaderboard = refreshEntry.leaderboard ?? undefined;
           const progress = computeConquestProgress(planet);
           const captureRace = computeCaptureRace(planet);
           const ranked = isPlanetRanked(leaderboard);
@@ -34,7 +41,9 @@ export function CrusadeDominationTable({ planets, leaderboardByPlanet, onSelectP
             <tr
               key={planet.planetId}
               onClick={() => onSelectPlanet(planet.planetId)}
-              className={`cursor-pointer ${ranked ? "bg-blue-50 dark:bg-blue-950/30" : ""}`}
+              className={`cursor-pointer ${ranked ? "bg-blue-50 dark:bg-blue-950/30" : ""} ${
+                refreshEntry.isLoading ? "pointer-events-none opacity-60" : ""
+              }`}
             >
               <td className={cellClass}>{planet.name}</td>
               <td className={cellClass}>{(planet.zone ?? 0) + 1}</td>
@@ -68,6 +77,12 @@ export function CrusadeDominationTable({ planets, leaderboardByPlanet, onSelectP
               </td>
               <td className={cellClass}>
                 <LeaderboardBreakdownCell result={leaderboard?.faction ?? null} />
+              </td>
+              <td className={cellClass}>
+                <div className="flex items-center gap-1">
+                  {refreshEntry.isLoading ? <Spinner size={20} /> : <PlanetFetchTimestamp entry={refreshEntry} />}
+                  <RefreshIconButton onRefresh={() => onRefreshPlanet(planet.planetId)} isLoading={refreshEntry.isLoading} />
+                </div>
               </td>
             </tr>
           );
