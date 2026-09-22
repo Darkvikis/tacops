@@ -1,21 +1,24 @@
 import { CrusadeDominationCard } from "./CrusadeDominationCard";
-import type { CrusadePlanet, PlanetLeaderboard } from "../api/types";
+import { EMPTY_REFRESH_ENTRY } from "./planet-refresh-defaults";
+import type { CrusadePlanet, PlanetRefreshEntry } from "../api/types";
 
 interface CrusadeDominationCardsProps {
   planets: CrusadePlanet[];
-  leaderboardByPlanet: Map<string, PlanetLeaderboard>;
+  planetRefreshState: Map<string, PlanetRefreshEntry>;
   onSelectPlanet: (planetId: string) => void;
+  onRefreshPlanet: (planetId: string) => void;
 }
 
-export function CrusadeDominationCards({ planets, leaderboardByPlanet, onSelectPlanet }: CrusadeDominationCardsProps) {
+export function CrusadeDominationCards({ planets, planetRefreshState, onSelectPlanet, onRefreshPlanet }: CrusadeDominationCardsProps) {
   return (
     <div className="mt-4 grid w-full grid-cols-[repeat(auto-fill,minmax(280px,1fr))] gap-3">
       {planets.map((planet) => (
         <CrusadeDominationCard
           key={planet.planetId}
           planet={planet}
-          leaderboard={leaderboardByPlanet.get(planet.planetId)}
+          refreshEntry={planetRefreshState.get(planet.planetId) ?? EMPTY_REFRESH_ENTRY}
           onSelectPlanet={onSelectPlanet}
+          onRefresh={() => onRefreshPlanet(planet.planetId)}
         />
       ))}
     </div>

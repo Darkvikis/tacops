@@ -19,14 +19,14 @@ import { ResourceTokens } from "./components/ResourceTokens";
 import { BuildTimestamp } from "./components/BuildTimestamp";
 import { fetchPlayerData } from "./api/fetch-player-data";
 import { entryIsUnavailable } from "./board/board-view-model";
-import { activePlanetIds, fetchCrusadeData, fetchLeaderboardData } from "./api/fetch-crusade-data";
+import { activePlanetIds, fetchCrusadeData, fetchPlanetLeaderboard, resolveMyFactionId } from "./api/fetch-crusade-data";
 import { storeWebCredential } from "./api/store-web-credential";
 import { fetchTakedownScreenEnabled } from "./api/fetch-app-config";
 import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
 import type { PriorityKey } from "./board/reward-amount";
-import type { CrusadeData, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlayerResources, RawUnit } from "./api/types";
+import type { CrusadeData, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlanetRefreshEntry, PlayerResources, RawUnit } from "./api/types";
 import type { HeroQuestJar } from "./hero-quests/hero-quest-view-model";
 
 const TABS = [
@@ -66,9 +66,33 @@ export function App() {
   const [sectorMap, setSectorMap] = useState<CrusadeSectorMap>({ planets: [], connections: [] });
   const [rawPlayerData, setRawPlayerData] = useState<unknown>(null);
   const [crusadeData, setCrusadeData] = useState<CrusadeData | null>(null);
-  const [planetLeaderboards, setPlanetLeaderboards] = useState<PlanetLeaderboard[]>([]);
+  const [planetRefreshState, setPlanetRefreshState] = useState<Map<string, PlanetRefreshEntry>>(new Map());
   const [crusadeError, setCrusadeError] = useState<string | null>(null);
-  const [crusadeProgress, setCrusadeProgress] = useState<{ done: number; total: number; phase: "side" | "faction" } | null>(null);
+  // Mirrors planetRefreshState for the scheduler's long-lived async worker loops (see the effect
+  // below) - those loops must always read the latest state across ticks, not a stale closure, and
+  // every mutation of planet-refresh state writes here synchronously before mirroring into
+  // planetRefreshState via setPlanetRefreshState. Nothing schedules off the state variable itself.
+  const planetRefreshStateRef = useRef<Map<string, PlanetRefreshEntry>>(new Map());
+  // Bumped on every scheduler effect setup/teardown so a stale in-flight fetch from a torn-down
+  // session (a previous GO, unmount, or React StrictMode's dev-mode double-invoke) can never
+  // commit into a newer session's state.
+  const generationRef = useRef(0);
+  // Set the instant activeTab leaves "crusade", cleared the instant it returns - drives the
+  // 5-minute/1-hour auto-refresh cadence switch below.
+  const awayFromCrusadeSinceRef = useRef<number | null>(null);
+  // Frozen once per go() alongside the initial planetRefreshState seed, so the scheduler's
+  // long-lived loops always fetch with the credentials/crusade identifiers from that session,
+  // not whatever environment/userId/clientSecret happen to be in state by the time a given tick
+  // actually runs.
+  const sessionParamsRef = useRef<{
+    environment: Environment;
+    crusadeId: string;
+    seasonNumber: number;
+    chosenSide: string;
+    myFactionId: string;
+    userId: string;
+    clientSecret: string;
+  } | null>(null);
   const [priorityOrder, setPriorityOrder] = useState<[PriorityKey, PriorityKey, PriorityKey, PriorityKey]>([
     "rarity",
     "crusadeBomb",
@@ -217,7 +241,6 @@ export function App() {
     setFetchState("loading");
     setBoard([]);
     setCrusadeError(null);
-    setCrusadeProgress(null);
     try {
       setStatus("Reading local credentials...");
       setStatus("Fetching player data...");
@@ -261,37 +284,165 @@ export function App() {
     } catch (error) {
       console.error("[App] go(): GET_CRUSADE failed", error);
       setCrusadeData(null);
-      setPlanetLeaderboards([]);
+      planetRefreshStateRef.current = new Map();
+      setPlanetRefreshState(new Map());
       setCrusadeError(`GET_CRUSADE failed: ${error}`);
       return;
     }
 
+    // Pre-populate a refresh-state entry for every active planet immediately - cards/rows render
+    // right away (showing "Not yet loaded") instead of waiting for any leaderboard fetch. The
+    // rolling scheduler effect below (keyed on crusadeData) picks these up and fills them in.
+    // During Domination (STRUGGLE) every planet is contestable at once - no zone filter, unlike
+    // the classic per-zone Expansion (CRUSADE) phase.
+    const planetIds = crusade.phase === "STRUGGLE" ? crusade.planets.map((p) => p.planetId) : activePlanetIds(crusade.activeZone);
+    const seeded = new Map<string, PlanetRefreshEntry>(
+      planetIds.map((id) => [id, { leaderboard: null, lastSuccessAt: null, lastAttemptAt: null, lastAttemptFailed: false, isLoading: false }]),
+    );
+    planetRefreshStateRef.current = seeded;
+    setPlanetRefreshState(seeded);
+    sessionParamsRef.current = {
+      environment,
+      crusadeId: crusade.crusadeId,
+      seasonNumber: crusade.seasonNumber,
+      chosenSide: crusade.chosenSide,
+      myFactionId: resolveMyFactionId(crusade),
+      userId,
+      clientSecret,
+    };
+  }
+
+  // Writes a planet's new refresh-state entry to both the scheduler's live ref and to React
+  // state in one synchronous pass (see planetRefreshStateRef's comment above) - shared by the
+  // auto-refresh scheduler and manual refresh so both commit the same way.
+  function commitPlanetRefresh(planetId: string, entry: PlanetRefreshEntry) {
+    const next = new Map(planetRefreshStateRef.current);
+    next.set(planetId, entry);
+    planetRefreshStateRef.current = next;
+    setPlanetRefreshState(next);
+  }
+
+  function commitPlanetSuccess(planetId: string, leaderboard: PlanetLeaderboard) {
+    const now = Date.now();
+    commitPlanetRefresh(planetId, { leaderboard, lastSuccessAt: now, lastAttemptAt: now, lastAttemptFailed: false, isLoading: false });
+  }
+
+  function commitPlanetFailure(planetId: string) {
+    const now = Date.now();
+    const prev = planetRefreshStateRef.current.get(planetId);
+    commitPlanetRefresh(planetId, {
+      leaderboard: prev?.leaderboard ?? null,
+      lastSuccessAt: prev?.lastSuccessAt ?? null,
+      lastAttemptAt: now,
+      lastAttemptFailed: true,
+      isLoading: false,
+    });
+  }
+
+  async function fetchOnePlanet(planetId: string): Promise<void> {
+    const session = sessionParamsRef.current;
+    if (!session) return;
     try {
-      // During Domination (STRUGGLE) every planet is contestable at once - no zone filter, unlike
-      // the classic per-zone Expansion (CRUSADE) phase.
-      const planetIds = crusade.phase === "STRUGGLE" ? crusade.planets.map((p) => p.planetId) : activePlanetIds(crusade.activeZone);
-      if (planetIds.length > 0) {
-        setCrusadeProgress({ done: 0, total: planetIds.length, phase: "side" });
-        const leaderboards = await fetchLeaderboardData(
-          environment,
-          crusade.crusadeId,
-          crusade.seasonNumber,
-          crusade.chosenSide,
-          planetIds,
-          webCredentials,
-          (done, total, phase) => setCrusadeProgress({ done, total, phase }),
-        );
-        setPlanetLeaderboards(leaderboards);
-      } else {
-        setPlanetLeaderboards([]);
-      }
+      const leaderboard = await fetchPlanetLeaderboard(
+        session.environment,
+        session.crusadeId,
+        session.seasonNumber,
+        session.chosenSide,
+        planetId,
+        session.myFactionId,
+        { userId: session.userId, clientSecret: session.clientSecret },
+      );
+      commitPlanetSuccess(planetId, leaderboard);
     } catch (error) {
-      console.error("[App] go(): GET_LEADERBOARD_2 failed", error);
-      setPlanetLeaderboards([]);
-      setCrusadeError(`GET_LEADERBOARD_2 failed: ${error}`);
-    } finally {
-      setCrusadeProgress(null);
+      console.error(`[App] fetchOnePlanet(${planetId}) failed`, error);
+      commitPlanetFailure(planetId);
     }
+  }
+
+  // Auto-refresh cadence: 5 minutes normally, backing off to 1 hour once the user's been away
+  // from the Crusades tab for more than 10 continuous minutes - see the activeTab effect below,
+  // which tracks awayFromCrusadeSinceRef.
+  const AUTO_REFRESH_WORKERS = 4;
+  const NORMAL_REFRESH_MS = 5 * 60 * 1000;
+  const AWAY_REFRESH_MS = 60 * 60 * 1000;
+  const AWAY_TRIGGER_MS = 10 * 60 * 1000;
+  const IDLE_POLL_MS = 5_000;
+
+  // Claims the most-overdue eligible planet (not currently loading, past its cadence threshold)
+  // by marking it isLoading synchronously - contains no `await`, so with up to 4 workers calling
+  // this "at once", each call fully completes (including the ref mutation) before the next one's
+  // synchronous body can run, making the claim race-free without any extra locking.
+  function claimEligiblePlanet(thresholdMs: number): string | null {
+    const map = planetRefreshStateRef.current;
+    const now = Date.now();
+    let candidate: string | null = null;
+    let mostOverdueKey = Infinity;
+    for (const [planetId, entry] of map) {
+      if (entry.isLoading) continue;
+      if (entry.lastAttemptAt !== null && now - entry.lastAttemptAt < thresholdMs) continue;
+      const overdueKey = entry.lastAttemptAt ?? -Infinity; // never-attempted sorts first
+      if (overdueKey < mostOverdueKey) {
+        mostOverdueKey = overdueKey;
+        candidate = planetId;
+      }
+    }
+    if (candidate) {
+      const entry = map.get(candidate)!;
+      commitPlanetRefresh(candidate, { ...entry, isLoading: true });
+    }
+    return candidate;
+  }
+
+  function currentRefreshThresholdMs(): number {
+    const awaySince = awayFromCrusadeSinceRef.current;
+    return awaySince !== null && Date.now() - awaySince > AWAY_TRIGGER_MS ? AWAY_REFRESH_MS : NORMAL_REFRESH_MS;
+  }
+
+  // Rolling auto-refresh: a fixed pool of workers continuously cycles through planets, always
+  // picking whichever is most overdue, never touching one currently loading or under its
+  // cadence's threshold. Restarts (new generation) on every fresh crusadeData (a new GO).
+  useEffect(() => {
+    if (!crusadeData) return;
+    const myGeneration = ++generationRef.current;
+
+    async function worker() {
+      while (generationRef.current === myGeneration) {
+        const planetId = claimEligiblePlanet(currentRefreshThresholdMs());
+        if (!planetId) {
+          await new Promise((resolve) => setTimeout(resolve, IDLE_POLL_MS));
+          continue;
+        }
+        await fetchOnePlanet(planetId);
+        if (generationRef.current !== myGeneration) return;
+      }
+    }
+
+    const workers = Array.from({ length: AUTO_REFRESH_WORKERS }, () => worker());
+    return () => {
+      generationRef.current++;
+      void workers;
+    };
+  }, [crusadeData]);
+
+  // Tracks how long the user has been away from the Crusades tab - reset to null the instant
+  // they return (snapping the auto-refresh cadence back to 5 minutes immediately), started the
+  // instant they leave.
+  useEffect(() => {
+    if (activeTab === "crusade") {
+      awayFromCrusadeSinceRef.current = null;
+    } else if (awayFromCrusadeSinceRef.current === null) {
+      awayFromCrusadeSinceRef.current = Date.now();
+    }
+  }, [activeTab]);
+
+  // Manual refresh (req 3) - bypasses claimEligiblePlanet's cadence threshold entirely and isn't
+  // capped by the 4-worker pool, since each refresh icon disables itself the instant it's
+  // clicked (self-limiting in practice).
+  function refreshPlanetNow(planetId: string) {
+    const entry = planetRefreshStateRef.current.get(planetId);
+    if (!entry || entry.isLoading) return;
+    commitPlanetRefresh(planetId, { ...entry, isLoading: true });
+    void fetchOnePlanet(planetId);
   }
 
   async function exportPlayerData() {
@@ -473,11 +624,11 @@ export function App() {
             {activeTab === "crusade" && (
               <CrusadeTab
                 crusadeData={crusadeData}
-                planetLeaderboards={planetLeaderboards}
+                planetRefreshState={planetRefreshState}
                 sectorMap={sectorMap}
                 error={crusadeError}
-                loadingProgress={crusadeProgress}
                 viewMode={viewMode}
+                onRefreshPlanet={refreshPlanetNow}
               />
             )}
           </div>

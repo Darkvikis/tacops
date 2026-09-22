@@ -19,8 +19,10 @@ describe("computeSectorMap", () => {
 
     const n1 = result.nodes.find((n) => n.planetId === "planet_001")!;
     const n2 = result.nodes.find((n) => n.planetId === "planet_002")!;
-    expect(n1).toMatchObject({ x: 0, y: 0 });
-    expect(n2).toMatchObject({ x: 1, y: 1 });
+    // y is inverted relative to x (game positionY increases upward, SVG y increases downward) -
+    // planet_001 has the lowest positionY but lands at the top of the rendered map (y: 0).
+    expect(n1).toMatchObject({ x: 0, y: 1 });
+    expect(n2).toMatchObject({ x: 1, y: 0 });
   });
 
   it("centers a single-planet axis at 0.5 instead of dividing by zero", () => {

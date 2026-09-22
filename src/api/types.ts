@@ -153,6 +153,19 @@ export interface PlanetLeaderboard {
   faction: FactionLeaderboardResult | null;
 }
 
+// Per-planet leaderboard fetch/refresh state, owned in App.tsx and threaded down through the
+// Crusades tab's cards/tables - drives the fetched-at timestamp, the loading spinner overlay, and
+// the manual refresh button's disabled state.
+export interface PlanetRefreshEntry {
+  leaderboard: PlanetLeaderboard | null;
+  // Timestamps are tracked separately so the UI can show "stale but last known-good" alongside a
+  // currently-failing attempt, rather than only ever showing one ambiguous timestamp.
+  lastSuccessAt: number | null;
+  lastAttemptAt: number | null;
+  lastAttemptFailed: boolean;
+  isLoading: boolean;
+}
+
 export interface PlayerResources {
   stamina: number;
   staminaNextTokenAt: number | null;

@@ -7,6 +7,22 @@ export function formatDateTime(epochMs: number): string {
   return `${date} ${time}`;
 }
 
+// Second-accurate, with a local timezone abbreviation - for "exactly when was this read" displays
+// (unlike formatDateTime above, which is minute-accurate and timezone-less). Intl supplies both
+// the seconds formatting and the tz abbreviation, rather than hand-rolling either.
+export function formatDateTimeWithSeconds(epochMs: number): string {
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+    timeZoneName: "short",
+  }).format(new Date(epochMs));
+}
+
 const DEFAULT_CLASS = "text-neutral-500 dark:text-neutral-400";
 
 // Urgency tiers for a deadline-style timestamp (a cap being reached, a raid token about to burn):

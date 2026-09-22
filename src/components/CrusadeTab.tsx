@@ -1,26 +1,27 @@
 import { useState } from "react";
-import { Spinner } from "./Spinner";
 import { CrusadePlanetsTable } from "./CrusadePlanetsTable";
 import { CrusadePlanetsCards } from "./CrusadePlanetsCards";
 import { CrusadeDominationCards } from "./CrusadeDominationCards";
 import { CrusadeDominationTable } from "./CrusadeDominationTable";
+import { DominationSortModeToggle } from "./DominationSortModeToggle";
 import { PlanetSectorMapModal } from "./PlanetSectorMapModal";
-import { sortDominationPlanets } from "../crusade/crusade-domination-view-model";
+import { sortDominationPlanets, type DominationSortMode } from "../crusade/crusade-domination-view-model";
 import { computeSectorMap } from "../crusade/crusade-sector-map-view-model";
 import type { ViewMode } from "./ViewModeToggle";
-import type { CrusadeData, CrusadeSectorMap, PlanetLeaderboard } from "../api/types";
+import type { CrusadeData, CrusadeSectorMap, PlanetLeaderboard, PlanetRefreshEntry } from "../api/types";
 
 interface CrusadeTabProps {
   crusadeData: CrusadeData | null;
-  planetLeaderboards: PlanetLeaderboard[];
+  planetRefreshState: Map<string, PlanetRefreshEntry>;
   sectorMap: CrusadeSectorMap;
   error: string | null;
-  loadingProgress: { done: number; total: number; phase: "side" | "faction" } | null;
   viewMode: ViewMode;
+  onRefreshPlanet: (planetId: string) => void;
 }
 
-export function CrusadeTab({ crusadeData, planetLeaderboards, sectorMap, error, loadingProgress, viewMode }: CrusadeTabProps) {
+export function CrusadeTab({ crusadeData, planetRefreshState, sectorMap, error, viewMode, onRefreshPlanet }: CrusadeTabProps) {
   const [selectedPlanetId, setSelectedPlanetId] = useState<string | null>(null);
+  const [dominationSortMode, setDominationSortMode] = useState<DominationSortMode>("closestToCapture");
 
   if (!crusadeData) {
     return error ? (
@@ -31,7 +32,15 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, sectorMap, error, 
       <p>No crusade data loaded.</p>
     );
   }
-  const leaderboardByPlanet = new Map(planetLeaderboards.map((l) => [l.planetId, l]));
+
+  // Leaderboard-only view, used solely to feed the existing sort helpers below (which take
+  // Map<string, PlanetLeaderboard>, not the richer per-planet refresh state) - entries with no
+  // leaderboard loaded yet are simply omitted, exactly like the old planetLeaderboards array
+  // before this planet's first fetch completed.
+  const leaderboardByPlanet = new Map<string, PlanetLeaderboard>();
+  for (const [planetId, entry] of planetRefreshState) {
+    if (entry.leaderboard) leaderboardByPlanet.set(planetId, entry.leaderboard);
+  }
 
   const selectedPlanetZone = selectedPlanetId
     ? (crusadeData.planets.find((p) => p.planetId === selectedPlanetId)?.zone ?? null)
@@ -47,28 +56,34 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, sectorMap, error, 
 
   if (crusadeData.phase === "STRUGGLE") {
     // Domination phase: every planet is contestable at once (no zone filter), ordered by
-    // opportunity - see sortDominationPlanets.
+    // opportunity - see sortDominationPlanets. Filtering against planetRefreshState (not
+    // leaderboardByPlanet) is what makes pre-population work - it's seeded for every active
+    // planet immediately in App.tsx's go(), long before any leaderboard fetch completes.
     const dominationPlanets = sortDominationPlanets(
-      crusadeData.planets.filter((p) => leaderboardByPlanet.has(p.planetId)),
+      crusadeData.planets.filter((p) => planetRefreshState.has(p.planetId)),
       leaderboardByPlanet,
+      dominationSortMode,
     );
     if (dominationPlanets.length === 0) {
-      return loadingProgress ? (
-        <p className="inline-flex items-center gap-2">
-          <Spinner />
-          {loadingProgress.phase === "side" ? "Loading crusade data..." : "Loading faction rankings..."}{" "}
-          {loadingProgress.done}/{loadingProgress.total} planets
-        </p>
-      ) : (
-        <p>No planet data loaded yet.</p>
-      );
+      return <p>No planet data loaded yet.</p>;
     }
     return (
       <>
+        <DominationSortModeToggle value={dominationSortMode} onChange={setDominationSortMode} />
         {viewMode === "table" ? (
-          <CrusadeDominationTable planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} onSelectPlanet={setSelectedPlanetId} />
+          <CrusadeDominationTable
+            planets={dominationPlanets}
+            planetRefreshState={planetRefreshState}
+            onSelectPlanet={setSelectedPlanetId}
+            onRefreshPlanet={onRefreshPlanet}
+          />
         ) : (
-          <CrusadeDominationCards planets={dominationPlanets} leaderboardByPlanet={leaderboardByPlanet} onSelectPlanet={setSelectedPlanetId} />
+          <CrusadeDominationCards
+            planets={dominationPlanets}
+            planetRefreshState={planetRefreshState}
+            onSelectPlanet={setSelectedPlanetId}
+            onRefreshPlanet={onRefreshPlanet}
+          />
         )}
         {sectorMapModal}
       </>
@@ -83,7 +98,7 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, sectorMap, error, 
   // signal (see fetch-crusade-data.ts's pickReferenceScore). Planets with no score yet (still
   // loading, or genuinely no faction leaderboard data) sort last rather than being dropped.
   const activePlanets = crusadeData.planets
-    .filter((p) => leaderboardByPlanet.has(p.planetId))
+    .filter((p) => planetRefreshState.has(p.planetId))
     .sort((a, b) => {
       const scoreA = leaderboardByPlanet.get(a.planetId)?.faction?.referenceScore?.points ?? Infinity;
       const scoreB = leaderboardByPlanet.get(b.planetId)?.faction?.referenceScore?.points ?? Infinity;
@@ -91,20 +106,12 @@ export function CrusadeTab({ crusadeData, planetLeaderboards, sectorMap, error, 
     });
 
   if (activePlanets.length === 0) {
-    return loadingProgress ? (
-      <p className="inline-flex items-center gap-2">
-        <Spinner />
-        {loadingProgress.phase === "side" ? "Loading crusade data..." : "Loading faction rankings..."}{" "}
-        {loadingProgress.done}/{loadingProgress.total} planets
-      </p>
-    ) : (
-      <p>No active-zone planet data loaded yet.</p>
-    );
+    return <p>No active-zone planet data loaded yet.</p>;
   }
 
   return viewMode === "table" ? (
-    <CrusadePlanetsTable planets={activePlanets} leaderboardByPlanet={leaderboardByPlanet} />
+    <CrusadePlanetsTable planets={activePlanets} planetRefreshState={planetRefreshState} onRefreshPlanet={onRefreshPlanet} />
   ) : (
-    <CrusadePlanetsCards planets={activePlanets} leaderboardByPlanet={leaderboardByPlanet} />
+    <CrusadePlanetsCards planets={activePlanets} planetRefreshState={planetRefreshState} onRefreshPlanet={onRefreshPlanet} />
   );
 }
