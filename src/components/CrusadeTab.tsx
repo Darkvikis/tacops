@@ -3,8 +3,9 @@ import { CrusadePlanetsTable } from "./CrusadePlanetsTable";
 import { CrusadePlanetsCards } from "./CrusadePlanetsCards";
 import { CrusadeDominationCards } from "./CrusadeDominationCards";
 import { CrusadeDominationTable } from "./CrusadeDominationTable";
+import { DominationSortModeToggle } from "./DominationSortModeToggle";
 import { PlanetSectorMapModal } from "./PlanetSectorMapModal";
-import { sortDominationPlanets } from "../crusade/crusade-domination-view-model";
+import { sortDominationPlanets, type DominationSortMode } from "../crusade/crusade-domination-view-model";
 import { computeSectorMap } from "../crusade/crusade-sector-map-view-model";
 import type { ViewMode } from "./ViewModeToggle";
 import type { CrusadeData, CrusadeSectorMap, PlanetLeaderboard, PlanetRefreshEntry } from "../api/types";
@@ -20,6 +21,7 @@ interface CrusadeTabProps {
 
 export function CrusadeTab({ crusadeData, planetRefreshState, sectorMap, error, viewMode, onRefreshPlanet }: CrusadeTabProps) {
   const [selectedPlanetId, setSelectedPlanetId] = useState<string | null>(null);
+  const [dominationSortMode, setDominationSortMode] = useState<DominationSortMode>("closestToCapture");
 
   if (!crusadeData) {
     return error ? (
@@ -60,12 +62,14 @@ export function CrusadeTab({ crusadeData, planetRefreshState, sectorMap, error, 
     const dominationPlanets = sortDominationPlanets(
       crusadeData.planets.filter((p) => planetRefreshState.has(p.planetId)),
       leaderboardByPlanet,
+      dominationSortMode,
     );
     if (dominationPlanets.length === 0) {
       return <p>No planet data loaded yet.</p>;
     }
     return (
       <>
+        <DominationSortModeToggle value={dominationSortMode} onChange={setDominationSortMode} />
         {viewMode === "table" ? (
           <CrusadeDominationTable
             planets={dominationPlanets}
