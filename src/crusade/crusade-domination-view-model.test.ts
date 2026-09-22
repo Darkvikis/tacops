@@ -142,4 +142,70 @@ describe("sortDominationPlanets", () => {
     ]);
     expect(sortDominationPlanets(planets, byPlanet).map((p) => p.planetId)).toEqual(["has-data", "no-data"]);
   });
+
+  it("always sinks just-captured planets (negative points remaining) below live contested ones, regardless of sort mode", () => {
+    const planets = [
+      // Devastation already crossed its threshold - stale, should sink to the bottom.
+      planet({
+        planetId: "just-captured",
+        sideOwner: "For",
+        pointsFor: 10,
+        pointsAgainst: 9999,
+        struggleData: { conquestThresholdPointsAttacker: 9000, conquestThresholdPointsDefender: 10000 },
+      }),
+      planet({
+        planetId: "still-contested",
+        sideOwner: "For",
+        pointsFor: 10,
+        pointsAgainst: 100,
+        struggleData: { conquestThresholdPointsAttacker: 9000, conquestThresholdPointsDefender: 10000 },
+      }),
+    ];
+    const byPlanet = new Map<string, PlanetLeaderboard>();
+    for (const mode of ["closestToCapture", "imperialFirst", "devastationFirst"] as const) {
+      expect(sortDominationPlanets(planets, byPlanet, mode).map((p) => p.planetId)).toEqual(["still-contested", "just-captured"]);
+    }
+  });
+
+  it("imperialFirst mode sorts by imperial points remaining first, devastation as tiebreak", () => {
+    const planets = [
+      planet({
+        planetId: "imperial-far",
+        sideOwner: "Against",
+        pointsFor: 10,
+        pointsAgainst: 10,
+        struggleData: { conquestThresholdPointsAttacker: 1000, conquestThresholdPointsDefender: 1000 },
+      }),
+      planet({
+        planetId: "imperial-close",
+        sideOwner: "Against",
+        pointsFor: 900,
+        pointsAgainst: 10,
+        struggleData: { conquestThresholdPointsAttacker: 1000, conquestThresholdPointsDefender: 1000 },
+      }),
+    ];
+    const byPlanet = new Map<string, PlanetLeaderboard>();
+    expect(sortDominationPlanets(planets, byPlanet, "imperialFirst").map((p) => p.planetId)).toEqual(["imperial-close", "imperial-far"]);
+  });
+
+  it("devastationFirst mode sorts by devastation points remaining first, imperial as tiebreak", () => {
+    const planets = [
+      planet({
+        planetId: "devastation-far",
+        sideOwner: "For",
+        pointsFor: 10,
+        pointsAgainst: 10,
+        struggleData: { conquestThresholdPointsAttacker: 1000, conquestThresholdPointsDefender: 1000 },
+      }),
+      planet({
+        planetId: "devastation-close",
+        sideOwner: "For",
+        pointsFor: 10,
+        pointsAgainst: 900,
+        struggleData: { conquestThresholdPointsAttacker: 1000, conquestThresholdPointsDefender: 1000 },
+      }),
+    ];
+    const byPlanet = new Map<string, PlanetLeaderboard>();
+    expect(sortDominationPlanets(planets, byPlanet, "devastationFirst").map((p) => p.planetId)).toEqual(["devastation-close", "devastation-far"]);
+  });
 });
