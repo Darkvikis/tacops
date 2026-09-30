@@ -29,7 +29,6 @@ import { isPlanetAutoRefreshable } from "./crusade/crusade-domination-view-model
 import { toggleStarredPlanet } from "./crusade/starred-planets";
 import { toggleTrackedPlanetId } from "./crusade/tracked-planet";
 import { appendTrackedSample, createTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
-import { AnonymousCrusadeSection } from "./components/AnonymousCrusadeSection";
 import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
@@ -721,13 +720,10 @@ export function App() {
       <h1 className="cursor-pointer text-2xl font-semibold select-none" onClick={handleTitleTap}>
         TacOps
       </h1>
-      {!devModeEnabled ? (
-        // No credentials, no login form - just a read-only crusade view sourced from the
-        // background poller's cache (see AnonymousCrusadeSection/worker/poller.ts). The full app
-        // (credential form/GO/Tabs) stays behind the same "tap the title 8 times" / press "8"
-        // trigger it always has (see toggleDevMode/handleKeyDown/handleTitleTap above).
-        <AnonymousCrusadeSection />
-      ) : (
+      {/* This fork runs its own deployment, so the full app is the default view rather than
+          upstream's read-only AnonymousCrusadeSection - only the environment switcher stays
+          behind the "8" trigger. Kept as a bare wrapper so upstream merges stay conflict-light. */}
+      {(
         <>
           <p>
             {isTauri()
