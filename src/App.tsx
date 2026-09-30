@@ -27,6 +27,8 @@ import { fetchCrusadeCache } from "./api/fetch-crusade-cache";
 import { seedPlanetRefreshStateFromCache } from "./api/crusade-cache-seed";
 import { isPlanetAutoRefreshable } from "./crusade/crusade-domination-view-model";
 import { toggleStarredPlanet } from "./crusade/starred-planets";
+import { toggleTrackedPlanetId } from "./crusade/tracked-planet";
+import { appendTrackedSample, createTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
 import { AnonymousCrusadeSection } from "./components/AnonymousCrusadeSection";
 import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
@@ -34,6 +36,7 @@ import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
 import type { PriorityKey } from "./board/reward-amount";
 import type { CrusadeData, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlanetRefreshEntry, PlayerResources, RawUnit } from "./api/types";
 import type { HeroQuestJar } from "./hero-quests/hero-quest-view-model";
+import type { TrackedPlanetState } from "./crusade/planet-tracker-view-model";
 
 const TABS = [
   { id: "operations", label: "Operations" },
@@ -76,6 +79,11 @@ export function App() {
   const [sectorMap, setSectorMap] = useState<CrusadeSectorMap>({ planets: [], connections: [] });
   const [rawPlayerData, setRawPlayerData] = useState<unknown>(null);
   const [crusadeData, setCrusadeData] = useState<CrusadeData | null>(null);
+  // Mirrors crusadeData for the dedicated tracker loop below (see the tracker effect) - that loop
+  // must always read the latest planet data across ticks, not a stale closure, without depending on
+  // crusadeData itself in its effect deps (which would tear the loop down and rebuild it on every
+  // routine score refresh). Written synchronously at every setCrusadeData call site.
+  const crusadeDataRef = useRef<CrusadeData | null>(null);
   // Bumped only in go() - unlike crusadeData itself, this changes exactly once per GO click, never
   // on the background per-planet score refresh inside fetchOnePlanet (which also calls
   // setCrusadeData to keep planet scores fresh - see below). The rolling-refresh scheduler effect
@@ -93,6 +101,18 @@ export function App() {
   // starred set (it decides which planets keep auto-refreshing), not a stale closure.
   const favoritedPlanetIdsRef = useRef<ReadonlySet<string>>(new Set());
   favoritedPlanetIdsRef.current = favoritedPlanetIds;
+  // The single planet (if any) the user has pinned to the top of the Domination tab for live,
+  // no-delay refreshing - see the dedicated tracker effect below. In-memory only, never persisted;
+  // resets to null on every go() (see go()'s reset points) and the instant the user untracks it.
+  const [trackedPlanetId, setTrackedPlanetId] = useState<string | null>(null);
+  const trackedPlanetIdRef = useRef<string | null>(null);
+  trackedPlanetIdRef.current = trackedPlanetId;
+  const [trackedPlanetState, setTrackedPlanetState] = useState<TrackedPlanetState | null>(null);
+  // Mirrors trackedPlanetState for the tracker loop, same reason as the refs above - specifically
+  // so the loop can check .frozen without depending on trackedPlanetState itself in its effect deps
+  // (which would tear down/rebuild the loop on every single sample).
+  const trackedPlanetStateRef = useRef<TrackedPlanetState | null>(null);
+  trackedPlanetStateRef.current = trackedPlanetState;
   // Bumped on every scheduler effect setup/teardown so a stale in-flight fetch from a torn-down
   // session (a previous GO, unmount, or React StrictMode's dev-mode double-invoke) can never
   // commit into a newer session's state.
@@ -260,6 +280,13 @@ export function App() {
     setFetchState("loading");
     setBoard([]);
     setCrusadeError(null);
+    // A fresh GO (possibly a different account/crusade entirely) can't carry over a tracked planet
+    // pointing at data that may no longer exist - in-memory tracking state resets on every go(),
+    // same as it does on a plain reload.
+    trackedPlanetIdRef.current = null;
+    setTrackedPlanetId(null);
+    trackedPlanetStateRef.current = null;
+    setTrackedPlanetState(null);
 
     // Fast-paint bootstrap from the background poller's cache (see worker/poller.ts) while the
     // real, per-account fetchCrusadeData() below is in flight. Guarded so a slow cache response
@@ -271,6 +298,7 @@ export function App() {
         if (sessionParamsRef.current) return;
         const { crusadeData: seededCrusadeData, planetRefreshState: seeded } = seedPlanetRefreshStateFromCache(cache);
         if (!seededCrusadeData) return;
+        crusadeDataRef.current = seededCrusadeData;
         setCrusadeData(seededCrusadeData);
         planetRefreshStateRef.current = seeded;
         setPlanetRefreshState(seeded);
@@ -325,9 +353,11 @@ export function App() {
     let crusade;
     try {
       crusade = await fetchCrusadeData(environment, webCredentials);
+      crusadeDataRef.current = crusade;
       setCrusadeData(crusade);
     } catch (error) {
       console.error("[App] go(): GET_CRUSADE failed", error);
+      crusadeDataRef.current = null;
       setCrusadeData(null);
       planetRefreshStateRef.current = new Map();
       setPlanetRefreshState(new Map());
@@ -412,16 +442,26 @@ export function App() {
   // data (pointsFor/pointsAgainst/sideOwner/struggleData) in one shot, unlike the per-planet
   // leaderboard fetch above. Decoupled onto its own cadence (see crusadeScoreRefreshLoop) rather
   // than piggybacking on every leaderboard tick, since it's a much heavier call - manual refresh
-  // still always fires it too, see refreshPlanetNow.
-  async function refreshCrusadeScores(): Promise<void> {
+  // still always fires it too, see refreshPlanetNow. Also called far more often (no delay between
+  // calls) by the tracker loop below while a planet is tracked - deduped via
+  // refreshCrusadeScoresInFlightRef so an overlapping call from crusadeScoreRefreshLoop's
+  // independent ~60s cadence can never race it and let a stale response clobber a newer one.
+  const refreshCrusadeScoresInFlightRef = useRef<Promise<void> | null>(null);
+  function refreshCrusadeScores(): Promise<void> {
+    if (refreshCrusadeScoresInFlightRef.current) return refreshCrusadeScoresInFlightRef.current;
     const session = sessionParamsRef.current;
-    if (!session) return;
-    try {
-      const crusade = await fetchCrusadeData(session.environment, { userId: session.userId, clientSecret: session.clientSecret });
-      setCrusadeData(crusade);
-    } catch (error) {
-      console.error("[App] refreshCrusadeScores() failed", error);
-    }
+    if (!session) return Promise.resolve();
+    const promise = fetchCrusadeData(session.environment, { userId: session.userId, clientSecret: session.clientSecret })
+      .then((crusade) => {
+        crusadeDataRef.current = crusade;
+        setCrusadeData(crusade);
+      })
+      .catch((error) => console.error("[App] refreshCrusadeScores() failed", error))
+      .finally(() => {
+        refreshCrusadeScoresInFlightRef.current = null;
+      });
+    refreshCrusadeScoresInFlightRef.current = promise;
+    return promise;
   }
 
   // Auto-refresh cadence: 5 minutes normally, backing off to 1 hour once the user's been away
@@ -450,6 +490,10 @@ export function App() {
     let candidate: string | null = null;
     let mostOverdueKey = Infinity;
     for (const [planetId, entry] of map) {
+      // The tracked planet has its own dedicated, unthrottled loop (see the tracker effect below) -
+      // letting the worker pool also claim it here would double-fetch it and fight over its
+      // isLoading flag.
+      if (planetId === trackedPlanetIdRef.current) continue;
       if (entry.isLoading) continue;
       if (!isPlanetAutoRefreshable(entry, favoritedPlanetIdsRef.current.has(planetId))) continue;
       if (entry.lastAttemptAt !== null && now - entry.lastAttemptAt < thresholdMs) continue;
@@ -512,6 +556,47 @@ export function App() {
       void workers;
     };
   }, [crusadeSessionId]);
+
+  // Dedicated, single-instance loop for whichever planet is tracked (see toggleTrackedPlanet) -
+  // separate from the worker pool above (which explicitly skips it, see claimEligiblePlanet) so it
+  // can refresh continuously with no delay between iterations, exactly like refreshPlanetNow fires
+  // both a leaderboard fetch and a crusade-score refresh together. Restarts whenever the tracked
+  // planet changes or a new go() starts a new session.
+  useEffect(() => {
+    if (!trackedPlanetId) return;
+    // Re-bound with an explicit type annotation (rather than relying on the flow-narrowing above)
+    // so the nested trackerLoop closure below sees a plain `string`, not `string | null` - TS
+    // discards flow narrowing of outer variables inside nested function bodies.
+    const planetId: string = trackedPlanetId;
+    let cancelled = false;
+
+    async function trackerLoop() {
+      while (!cancelled) {
+        const planet = crusadeDataRef.current?.planets.find((p) => p.planetId === planetId);
+        if (!planet) return; // the tracked planet vanished from this crusade's data - nothing sensible to sample
+        setTrackedPlanetState((prev) => {
+          if (!prev || prev.planetId !== planetId) return prev;
+          const restarted = restartIfRecontested(prev, planet, Date.now());
+          return appendTrackedSample(restarted, planet, Date.now());
+        });
+        if (cancelled) return;
+        if (!trackedPlanetStateRef.current?.frozen) {
+          await Promise.all([fetchOnePlanet(planetId), refreshCrusadeScores()]);
+        } else {
+          // Frozen (captured/in cooldown) - don't add extra fetch load for what can be a
+          // multi-hour cooldown window. Just re-check the frozen flag periodically so recontest
+          // (detected via the existing, independent crusadeScoreRefreshLoop's own ~60s cadence,
+          // which keeps running regardless of tracking) is picked up reasonably promptly.
+          await new Promise((resolve) => setTimeout(resolve, IDLE_POLL_MS));
+        }
+      }
+    }
+
+    void trackerLoop();
+    return () => {
+      cancelled = true;
+    };
+  }, [trackedPlanetId, crusadeSessionId]);
 
   // Tracks how long the user has been away from the Crusades tab - reset to null the instant
   // they return (snapping the auto-refresh cadence back to 5 minutes immediately), started the
@@ -590,6 +675,20 @@ export function App() {
     setFavoritedPlanets(userId, clientSecret, [...next])
       .then(() => setToastMessage("Favorite planets saved"))
       .catch((error) => console.error("[App] toggleFavoritePlanet(): setFavoritedPlanets failed", error));
+  }
+
+  // In-memory only (never persisted) - see trackedPlanetId's own comment. Untracking (clicking the
+  // already-tracked planet again) clears the graph entirely; tracking a new one seeds a fresh state
+  // starting now. The TrackIconButton on every other planet is disabled while one is tracked (see
+  // isTrackDisabled), so toggleTrackedPlanetId only ever actually switches planets via this path
+  // when nothing was tracked yet.
+  function toggleTrackedPlanet(planetId: string) {
+    const next = toggleTrackedPlanetId(trackedPlanetId, planetId);
+    trackedPlanetIdRef.current = next;
+    setTrackedPlanetId(next);
+    const nextState = next ? createTrackedPlanetState(next, Date.now()) : null;
+    trackedPlanetStateRef.current = nextState;
+    setTrackedPlanetState(nextState);
   }
 
   async function exportPlayerData() {
@@ -785,6 +884,9 @@ export function App() {
                 onRefreshPlanet={refreshPlanetNow}
                 favoritedPlanetIds={favoritedPlanetIds}
                 onToggleFavoritePlanet={toggleFavoritePlanet}
+                trackedPlanetId={trackedPlanetId}
+                trackedPlanetState={trackedPlanetState}
+                onToggleTrackPlanet={toggleTrackedPlanet}
               />
             )}
           </div>
