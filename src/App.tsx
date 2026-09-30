@@ -17,17 +17,26 @@ import { RewardPriorityPicker } from "./components/RewardPriorityPicker";
 import { RequiredCharacterPool } from "./components/RequiredCharacterPool";
 import { ResourceTokens } from "./components/ResourceTokens";
 import { BuildTimestamp } from "./components/BuildTimestamp";
+import { Toast } from "./components/Toast";
 import { fetchPlayerData } from "./api/fetch-player-data";
 import { entryIsUnavailable } from "./board/board-view-model";
 import { activePlanetIds, fetchCrusadeData, fetchPlanetLeaderboard, resolveMyFactionId } from "./api/fetch-crusade-data";
 import { storeWebCredential } from "./api/store-web-credential";
-import { fetchTakedownScreenEnabled } from "./api/fetch-app-config";
+import { fetchUserPreferences, setAntiFavoritedCharacters, setFavoritedCharacters, setFavoritedPlanets } from "./api/user-preferences";
+import { fetchCrusadeCache } from "./api/fetch-crusade-cache";
+import { seedPlanetRefreshStateFromCache } from "./api/crusade-cache-seed";
+import { isPlanetAutoRefreshable } from "./crusade/crusade-domination-view-model";
+import { toggleStarredPlanet } from "./crusade/starred-planets";
+import { toggleTrackedPlanetId } from "./crusade/tracked-planet";
+import { appendTrackedSample, createTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
+import { AnonymousCrusadeSection } from "./components/AnonymousCrusadeSection";
 import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
 import type { PriorityKey } from "./board/reward-amount";
 import type { CrusadeData, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlanetRefreshEntry, PlayerResources, RawUnit } from "./api/types";
 import type { HeroQuestJar } from "./hero-quests/hero-quest-view-model";
+import type { TrackedPlanetState } from "./crusade/planet-tracker-view-model";
 
 const TABS = [
   { id: "operations", label: "Operations" },
@@ -59,6 +68,10 @@ export function App() {
   const [secondsRemaining, setSecondsRemaining] = useState(FETCH_COUNTDOWN_SECONDS);
   const [board, setBoard] = useState<ExpeditionBoardEntry[]>([]);
   const [heroes, setHeroes] = useState<RawUnit[]>([]);
+  const [favoritedCharacterIds, setFavoritedCharacterIds] = useState<Set<string>>(new Set());
+  const [antiFavoritedCharacterIds, setAntiFavoritedCharacterIds] = useState<Set<string>>(new Set());
+  const [favoritedPlanetIds, setFavoritedPlanetIds] = useState<Set<string>>(new Set());
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [machinesOfWar, setMachinesOfWar] = useState<RawUnit[]>([]);
   const [adViewsRemaining, setAdViewsRemaining] = useState<number | null>(null);
   const [resources, setResources] = useState<PlayerResources | null>(null);
@@ -66,6 +79,17 @@ export function App() {
   const [sectorMap, setSectorMap] = useState<CrusadeSectorMap>({ planets: [], connections: [] });
   const [rawPlayerData, setRawPlayerData] = useState<unknown>(null);
   const [crusadeData, setCrusadeData] = useState<CrusadeData | null>(null);
+  // Mirrors crusadeData for the dedicated tracker loop below (see the tracker effect) - that loop
+  // must always read the latest planet data across ticks, not a stale closure, without depending on
+  // crusadeData itself in its effect deps (which would tear the loop down and rebuild it on every
+  // routine score refresh). Written synchronously at every setCrusadeData call site.
+  const crusadeDataRef = useRef<CrusadeData | null>(null);
+  // Bumped only in go() - unlike crusadeData itself, this changes exactly once per GO click, never
+  // on the background per-planet score refresh inside fetchOnePlanet (which also calls
+  // setCrusadeData to keep planet scores fresh - see below). The rolling-refresh scheduler effect
+  // keys off this instead of crusadeData so a routine planet-score update can't tear down and
+  // restart every worker mid-flight.
+  const [crusadeSessionId, setCrusadeSessionId] = useState(0);
   const [planetRefreshState, setPlanetRefreshState] = useState<Map<string, PlanetRefreshEntry>>(new Map());
   const [crusadeError, setCrusadeError] = useState<string | null>(null);
   // Mirrors planetRefreshState for the scheduler's long-lived async worker loops (see the effect
@@ -73,6 +97,22 @@ export function App() {
   // every mutation of planet-refresh state writes here synchronously before mirroring into
   // planetRefreshState via setPlanetRefreshState. Nothing schedules off the state variable itself.
   const planetRefreshStateRef = useRef<Map<string, PlanetRefreshEntry>>(new Map());
+  // Same reason as planetRefreshStateRef: the scheduler's long-lived loops must see the latest
+  // starred set (it decides which planets keep auto-refreshing), not a stale closure.
+  const favoritedPlanetIdsRef = useRef<ReadonlySet<string>>(new Set());
+  favoritedPlanetIdsRef.current = favoritedPlanetIds;
+  // The single planet (if any) the user has pinned to the top of the Domination tab for live,
+  // no-delay refreshing - see the dedicated tracker effect below. In-memory only, never persisted;
+  // resets to null on every go() (see go()'s reset points) and the instant the user untracks it.
+  const [trackedPlanetId, setTrackedPlanetId] = useState<string | null>(null);
+  const trackedPlanetIdRef = useRef<string | null>(null);
+  trackedPlanetIdRef.current = trackedPlanetId;
+  const [trackedPlanetState, setTrackedPlanetState] = useState<TrackedPlanetState | null>(null);
+  // Mirrors trackedPlanetState for the tracker loop, same reason as the refs above - specifically
+  // so the loop can check .frozen without depending on trackedPlanetState itself in its effect deps
+  // (which would tear down/rebuild the loop on every single sample).
+  const trackedPlanetStateRef = useRef<TrackedPlanetState | null>(null);
+  trackedPlanetStateRef.current = trackedPlanetState;
   // Bumped on every scheduler effect setup/teardown so a stale in-flight fetch from a torn-down
   // session (a previous GO, unmount, or React StrictMode's dev-mode double-invoke) can never
   // commit into a newer session's state.
@@ -157,17 +197,16 @@ export function App() {
     setSolverState("solving");
     setSolverError(undefined);
     setSolverIncompleteReason(undefined);
-    const request: SolveRequest = { requestId, board, heroes, priorityOrder };
+    const request: SolveRequest = {
+      requestId,
+      board,
+      heroes,
+      priorityOrder,
+      favoritedCharacterIds: [...favoritedCharacterIds],
+      antiFavoritedCharacterIds: [...antiFavoritedCharacterIds],
+    };
     worker.postMessage(request);
-  }, [board, heroes, priorityOrder]);
-
-  // Env-controlled takedown gate: only ever flips devModeEnabled on early (skipping the screen),
-  // never back off - the 8x gesture still works as a manual fallback either way.
-  useEffect(() => {
-    fetchTakedownScreenEnabled().then((enabled) => {
-      if (!enabled) setDevModeEnabled(true);
-    });
-  }, []);
+  }, [board, heroes, priorityOrder, favoritedCharacterIds, antiFavoritedCharacterIds]);
 
   function toggleDevMode() {
     setDevModeEnabled((current) => {
@@ -241,6 +280,31 @@ export function App() {
     setFetchState("loading");
     setBoard([]);
     setCrusadeError(null);
+    // A fresh GO (possibly a different account/crusade entirely) can't carry over a tracked planet
+    // pointing at data that may no longer exist - in-memory tracking state resets on every go(),
+    // same as it does on a plain reload.
+    trackedPlanetIdRef.current = null;
+    setTrackedPlanetId(null);
+    trackedPlanetStateRef.current = null;
+    setTrackedPlanetState(null);
+
+    // Fast-paint bootstrap from the background poller's cache (see worker/poller.ts) while the
+    // real, per-account fetchCrusadeData() below is in flight. Guarded so a slow cache response
+    // can never clobber fresher real data: sessionParamsRef is only ever populated once the real
+    // fetch below succeeds, and the scheduler effect only starts once crusadeSessionId is bumped
+    // (also only after a real success) - so this seed can't race it either way.
+    fetchCrusadeCache()
+      .then((cache) => {
+        if (sessionParamsRef.current) return;
+        const { crusadeData: seededCrusadeData, planetRefreshState: seeded } = seedPlanetRefreshStateFromCache(cache);
+        if (!seededCrusadeData) return;
+        crusadeDataRef.current = seededCrusadeData;
+        setCrusadeData(seededCrusadeData);
+        planetRefreshStateRef.current = seeded;
+        setPlanetRefreshState(seeded);
+      })
+      .catch((error) => console.error("[App] go(): fetchCrusadeCache seed failed", error));
+
     try {
       setStatus("Reading local credentials...");
       setStatus("Fetching player data...");
@@ -263,6 +327,15 @@ export function App() {
         void storeWebCredential(userId, clientSecret);
         void trackUsage(userId, environment);
       }
+      // Best-effort restore of starred characters/planets - a failure here shouldn't affect the
+      // data that already loaded successfully above, so it's not part of the try/catch's failure path.
+      fetchUserPreferences(userId)
+        .then((preferences) => {
+          setFavoritedCharacterIds(new Set(preferences.favoritedCharacters));
+          setFavoritedPlanetIds(new Set(preferences.favoritedPlanets));
+          setAntiFavoritedCharacterIds(new Set(preferences.antiFavoritedCharacters));
+        })
+        .catch((error) => console.error("[App] go(): fetchUserPreferences failed", error));
     } catch (error) {
       console.error("[App] go(): caught error", error);
       setStatus(`Failed: ${error}`);
@@ -280,13 +353,18 @@ export function App() {
     let crusade;
     try {
       crusade = await fetchCrusadeData(environment, webCredentials);
+      crusadeDataRef.current = crusade;
       setCrusadeData(crusade);
     } catch (error) {
       console.error("[App] go(): GET_CRUSADE failed", error);
+      crusadeDataRef.current = null;
       setCrusadeData(null);
       planetRefreshStateRef.current = new Map();
       setPlanetRefreshState(new Map());
       setCrusadeError(`GET_CRUSADE failed: ${error}`);
+      // Also stops any scheduler still running from a previous successful session - otherwise it
+      // would keep polling planets for a crusade the UI no longer shows.
+      setCrusadeSessionId((id) => id + 1);
       return;
     }
 
@@ -301,6 +379,7 @@ export function App() {
     );
     planetRefreshStateRef.current = seeded;
     setPlanetRefreshState(seeded);
+    setCrusadeSessionId((id) => id + 1);
     sessionParamsRef.current = {
       environment,
       crusadeId: crusade.crusadeId,
@@ -359,6 +438,32 @@ export function App() {
     }
   }
 
+  // GET_CRUSADE has no per-planet variant - it always returns every planet's own score/ownership
+  // data (pointsFor/pointsAgainst/sideOwner/struggleData) in one shot, unlike the per-planet
+  // leaderboard fetch above. Decoupled onto its own cadence (see crusadeScoreRefreshLoop) rather
+  // than piggybacking on every leaderboard tick, since it's a much heavier call - manual refresh
+  // still always fires it too, see refreshPlanetNow. Also called far more often (no delay between
+  // calls) by the tracker loop below while a planet is tracked - deduped via
+  // refreshCrusadeScoresInFlightRef so an overlapping call from crusadeScoreRefreshLoop's
+  // independent ~60s cadence can never race it and let a stale response clobber a newer one.
+  const refreshCrusadeScoresInFlightRef = useRef<Promise<void> | null>(null);
+  function refreshCrusadeScores(): Promise<void> {
+    if (refreshCrusadeScoresInFlightRef.current) return refreshCrusadeScoresInFlightRef.current;
+    const session = sessionParamsRef.current;
+    if (!session) return Promise.resolve();
+    const promise = fetchCrusadeData(session.environment, { userId: session.userId, clientSecret: session.clientSecret })
+      .then((crusade) => {
+        crusadeDataRef.current = crusade;
+        setCrusadeData(crusade);
+      })
+      .catch((error) => console.error("[App] refreshCrusadeScores() failed", error))
+      .finally(() => {
+        refreshCrusadeScoresInFlightRef.current = null;
+      });
+    refreshCrusadeScoresInFlightRef.current = promise;
+    return promise;
+  }
+
   // Auto-refresh cadence: 5 minutes normally, backing off to 1 hour once the user's been away
   // from the Crusades tab for more than 10 continuous minutes - see the activeTab effect below,
   // which tracks awayFromCrusadeSinceRef.
@@ -368,8 +473,15 @@ export function App() {
   const AWAY_TRIGGER_MS = 10 * 60 * 1000;
   const IDLE_POLL_MS = 5_000;
 
-  // Claims the most-overdue eligible planet (not currently loading, past its cadence threshold)
-  // by marking it isLoading synchronously - contains no `await`, so with up to 4 workers calling
+  // Separate, much slower cadence for refreshCrusadeScores (see currentCrusadeScoreRefreshMs) -
+  // deliberately not tied to NORMAL_REFRESH_MS/AWAY_REFRESH_MS above, since GET_CRUSADE is a much
+  // heavier call than a single planet's leaderboard.
+  const CRUSADE_SCORE_ACTIVE_REFRESH_MS = 60 * 1000;
+  const CRUSADE_SCORE_AWAY_REFRESH_MS = 5 * 60 * 1000;
+
+  // Claims the most-overdue eligible planet (not currently loading, auto-refreshable - starred,
+  // ranked, or not yet successfully loaded, see isPlanetAutoRefreshable - and past its cadence
+  // threshold) by marking it isLoading synchronously - contains no `await`, so with up to 4 workers calling
   // this "at once", each call fully completes (including the ref mutation) before the next one's
   // synchronous body can run, making the claim race-free without any extra locking.
   function claimEligiblePlanet(thresholdMs: number): string | null {
@@ -378,7 +490,12 @@ export function App() {
     let candidate: string | null = null;
     let mostOverdueKey = Infinity;
     for (const [planetId, entry] of map) {
+      // The tracked planet has its own dedicated, unthrottled loop (see the tracker effect below) -
+      // letting the worker pool also claim it here would double-fetch it and fight over its
+      // isLoading flag.
+      if (planetId === trackedPlanetIdRef.current) continue;
       if (entry.isLoading) continue;
+      if (!isPlanetAutoRefreshable(entry, favoritedPlanetIdsRef.current.has(planetId))) continue;
       if (entry.lastAttemptAt !== null && now - entry.lastAttemptAt < thresholdMs) continue;
       const overdueKey = entry.lastAttemptAt ?? -Infinity; // never-attempted sorts first
       if (overdueKey < mostOverdueKey) {
@@ -398,9 +515,14 @@ export function App() {
     return awaySince !== null && Date.now() - awaySince > AWAY_TRIGGER_MS ? AWAY_REFRESH_MS : NORMAL_REFRESH_MS;
   }
 
+  function currentCrusadeScoreRefreshMs(): number {
+    const awaySince = awayFromCrusadeSinceRef.current;
+    return awaySince !== null && Date.now() - awaySince > AWAY_TRIGGER_MS ? CRUSADE_SCORE_AWAY_REFRESH_MS : CRUSADE_SCORE_ACTIVE_REFRESH_MS;
+  }
+
   // Rolling auto-refresh: a fixed pool of workers continuously cycles through planets, always
   // picking whichever is most overdue, never touching one currently loading or under its
-  // cadence's threshold. Restarts (new generation) on every fresh crusadeData (a new GO).
+  // cadence's threshold. Restarts (new generation) on every new GO - see crusadeSessionId.
   useEffect(() => {
     if (!crusadeData) return;
     const myGeneration = ++generationRef.current;
@@ -417,12 +539,64 @@ export function App() {
       }
     }
 
-    const workers = Array.from({ length: AUTO_REFRESH_WORKERS }, () => worker());
+    // Separate loop, same generation lifecycle as the per-planet workers above - go() already
+    // fetched crusade scores once, so this waits a full interval before its first refresh rather
+    // than immediately re-fetching.
+    async function crusadeScoreRefreshLoop() {
+      while (generationRef.current === myGeneration) {
+        await new Promise((resolve) => setTimeout(resolve, currentCrusadeScoreRefreshMs()));
+        if (generationRef.current !== myGeneration) return;
+        await refreshCrusadeScores();
+      }
+    }
+
+    const workers = [...Array.from({ length: AUTO_REFRESH_WORKERS }, () => worker()), crusadeScoreRefreshLoop()];
     return () => {
       generationRef.current++;
       void workers;
     };
-  }, [crusadeData]);
+  }, [crusadeSessionId]);
+
+  // Dedicated, single-instance loop for whichever planet is tracked (see toggleTrackedPlanet) -
+  // separate from the worker pool above (which explicitly skips it, see claimEligiblePlanet) so it
+  // can refresh continuously with no delay between iterations, exactly like refreshPlanetNow fires
+  // both a leaderboard fetch and a crusade-score refresh together. Restarts whenever the tracked
+  // planet changes or a new go() starts a new session.
+  useEffect(() => {
+    if (!trackedPlanetId) return;
+    // Re-bound with an explicit type annotation (rather than relying on the flow-narrowing above)
+    // so the nested trackerLoop closure below sees a plain `string`, not `string | null` - TS
+    // discards flow narrowing of outer variables inside nested function bodies.
+    const planetId: string = trackedPlanetId;
+    let cancelled = false;
+
+    async function trackerLoop() {
+      while (!cancelled) {
+        const planet = crusadeDataRef.current?.planets.find((p) => p.planetId === planetId);
+        if (!planet) return; // the tracked planet vanished from this crusade's data - nothing sensible to sample
+        setTrackedPlanetState((prev) => {
+          if (!prev || prev.planetId !== planetId) return prev;
+          const restarted = restartIfRecontested(prev, planet, Date.now());
+          return appendTrackedSample(restarted, planet, Date.now());
+        });
+        if (cancelled) return;
+        if (!trackedPlanetStateRef.current?.frozen) {
+          await Promise.all([fetchOnePlanet(planetId), refreshCrusadeScores()]);
+        } else {
+          // Frozen (captured/in cooldown) - don't add extra fetch load for what can be a
+          // multi-hour cooldown window. Just re-check the frozen flag periodically so recontest
+          // (detected via the existing, independent crusadeScoreRefreshLoop's own ~60s cadence,
+          // which keeps running regardless of tracking) is picked up reasonably promptly.
+          await new Promise((resolve) => setTimeout(resolve, IDLE_POLL_MS));
+        }
+      }
+    }
+
+    void trackerLoop();
+    return () => {
+      cancelled = true;
+    };
+  }, [trackedPlanetId, crusadeSessionId]);
 
   // Tracks how long the user has been away from the Crusades tab - reset to null the instant
   // they return (snapping the auto-refresh cadence back to 5 minutes immediately), started the
@@ -443,6 +617,78 @@ export function App() {
     if (!entry || entry.isLoading) return;
     commitPlanetRefresh(planetId, { ...entry, isLoading: true });
     void fetchOnePlanet(planetId);
+    // Manual refresh always also refreshes planet scores, independent of the slower background
+    // cadence in crusadeScoreRefreshLoop.
+    void refreshCrusadeScores();
+  }
+
+  // Optimistically updates local state, then fires the full replacement list to the backend -
+  // best-effort, matching trackUsage/storeWebCredential above (a sync failure shouldn't block the
+  // UI from reflecting the click). Shows a brief auto-dismissing confirmation once the save
+  // actually lands, rather than optimistically on the click itself.
+  function toggleFavoriteCharacter(characterId: string) {
+    const next = new Set(favoritedCharacterIds);
+    const turningOn = !next.has(characterId);
+    if (turningOn) next.add(characterId);
+    else next.delete(characterId);
+    setFavoritedCharacterIds(next);
+    setFavoritedCharacters(userId, clientSecret, [...next])
+      .then(() => setToastMessage("Favorite characters saved"))
+      .catch((error) => console.error("[App] toggleFavoriteCharacter(): setFavoritedCharacters failed", error));
+
+    // Favoriting and anti-favoriting a character at once makes no sense for the solver's
+    // preference logic - turning one on clears the other, both locally and server-side.
+    if (turningOn && antiFavoritedCharacterIds.has(characterId)) {
+      const nextAnti = new Set(antiFavoritedCharacterIds);
+      nextAnti.delete(characterId);
+      setAntiFavoritedCharacterIds(nextAnti);
+      setAntiFavoritedCharacters(userId, clientSecret, [...nextAnti]).catch((error) =>
+        console.error("[App] toggleFavoriteCharacter(): clearing anti-favorite failed", error),
+      );
+    }
+  }
+
+  function toggleAntiFavoriteCharacter(characterId: string) {
+    const next = new Set(antiFavoritedCharacterIds);
+    const turningOn = !next.has(characterId);
+    if (turningOn) next.add(characterId);
+    else next.delete(characterId);
+    setAntiFavoritedCharacterIds(next);
+    setAntiFavoritedCharacters(userId, clientSecret, [...next])
+      .then(() => setToastMessage("Deprioritized characters saved"))
+      .catch((error) => console.error("[App] toggleAntiFavoriteCharacter(): setAntiFavoritedCharacters failed", error));
+
+    if (turningOn && favoritedCharacterIds.has(characterId)) {
+      const nextFav = new Set(favoritedCharacterIds);
+      nextFav.delete(characterId);
+      setFavoritedCharacterIds(nextFav);
+      setFavoritedCharacters(userId, clientSecret, [...nextFav]).catch((error) =>
+        console.error("[App] toggleAntiFavoriteCharacter(): clearing favorite failed", error),
+      );
+    }
+  }
+
+  function toggleFavoritePlanet(planetId: string) {
+    const next = toggleStarredPlanet(favoritedPlanetIds, planetId);
+    if (next === favoritedPlanetIds) return; // at the star cap (the UI disables starring then; belt and braces)
+    setFavoritedPlanetIds(new Set(next));
+    setFavoritedPlanets(userId, clientSecret, [...next])
+      .then(() => setToastMessage("Favorite planets saved"))
+      .catch((error) => console.error("[App] toggleFavoritePlanet(): setFavoritedPlanets failed", error));
+  }
+
+  // In-memory only (never persisted) - see trackedPlanetId's own comment. Untracking (clicking the
+  // already-tracked planet again) clears the graph entirely; tracking a new one seeds a fresh state
+  // starting now. The TrackIconButton on every other planet is disabled while one is tracked (see
+  // isTrackDisabled), so toggleTrackedPlanetId only ever actually switches planets via this path
+  // when nothing was tracked yet.
+  function toggleTrackedPlanet(planetId: string) {
+    const next = toggleTrackedPlanetId(trackedPlanetId, planetId);
+    trackedPlanetIdRef.current = next;
+    setTrackedPlanetId(next);
+    const nextState = next ? createTrackedPlanetState(next, Date.now()) : null;
+    trackedPlanetStateRef.current = nextState;
+    setTrackedPlanetState(nextState);
   }
 
   async function exportPlayerData() {
@@ -471,19 +717,16 @@ export function App() {
       className="mx-auto flex min-h-screen w-full flex-col items-center bg-neutral-100 px-4 py-[5vh] text-center text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
     >
       <BuildTimestamp />
+      {toastMessage && <Toast message={toastMessage} onDismiss={() => setToastMessage(null)} />}
       <h1 className="cursor-pointer text-2xl font-semibold select-none" onClick={handleTitleTap}>
         TacOps
       </h1>
       {!devModeEnabled ? (
-        // Taken down at the developer's own discretion, not a legal order - the code stays as-is
-        // and the tool itself is still fully reachable, just gated behind the same "tap the title
-        // 8 times" / press "8" trigger that already existed for dev-mode extras (see
-        // toggleDevMode/handleKeyDown/handleTitleTap above). Nothing removed, just hidden by
-        // default.
-        <p className="max-w-md">
-          TacOps has been taken down. I decided handling players' Tacticus login credentials
-          (client secrets) directly was too risky to keep distributing this tool publicly.
-        </p>
+        // No credentials, no login form - just a read-only crusade view sourced from the
+        // background poller's cache (see AnonymousCrusadeSection/worker/poller.ts). The full app
+        // (credential form/GO/Tabs) stays behind the same "tap the title 8 times" / press "8"
+        // trigger it always has (see toggleDevMode/handleKeyDown/handleTitleTap above).
+        <AnonymousCrusadeSection />
       ) : (
         <>
           <p>
@@ -616,7 +859,15 @@ export function App() {
                 </div>
               </>
             )}
-            {activeTab === "characters" && <CharactersTable heroes={heroes} />}
+            {activeTab === "characters" && (
+              <CharactersTable
+                heroes={heroes}
+                favoritedCharacterIds={favoritedCharacterIds}
+                onToggleFavorite={toggleFavoriteCharacter}
+                antiFavoritedCharacterIds={antiFavoritedCharacterIds}
+                onToggleAntiFavorite={toggleAntiFavoriteCharacter}
+              />
+            )}
             {activeTab === "mows" && <MowTable machinesOfWar={machinesOfWar} />}
             {activeTab === "guildchat" && <GuildChatTab environment={environment} />}
             {activeTab === "coverage" && <BoardCoverageTab />}
@@ -629,6 +880,11 @@ export function App() {
                 error={crusadeError}
                 viewMode={viewMode}
                 onRefreshPlanet={refreshPlanetNow}
+                favoritedPlanetIds={favoritedPlanetIds}
+                onToggleFavoritePlanet={toggleFavoritePlanet}
+                trackedPlanetId={trackedPlanetId}
+                trackedPlanetState={trackedPlanetState}
+                onToggleTrackPlanet={toggleTrackedPlanet}
               />
             )}
           </div>

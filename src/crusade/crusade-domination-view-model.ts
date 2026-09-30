@@ -1,4 +1,4 @@
-import type { CrusadePlanet, PlanetLeaderboard } from "../api/types";
+import type { CrusadePlanet, PlanetLeaderboard, PlanetRefreshEntry } from "../api/types";
 
 export interface ConquestProgress {
   imperialCurrent: number;
@@ -37,6 +37,15 @@ export function isPlanetRanked(leaderboard: PlanetLeaderboard | undefined): bool
   return leaderboard?.side?.myRank != null || leaderboard?.faction?.myRank != null;
 }
 
+// Background polling is reserved for planets the user cares about: starred or ranked ones. Any
+// other planet still gets loaded once (that first fetch is also how a rank is discovered) - i.e.
+// until it has a successful fetch, it stays eligible (still subject to the caller's cadence
+// threshold, so a failing load retries at the normal pace rather than hot-looping) - and after that
+// only updates via its manual refresh button.
+export function isPlanetAutoRefreshable(entry: PlanetRefreshEntry, isStarred: boolean): boolean {
+  return isStarred || entry.lastSuccessAt === null || isPlanetRanked(entry.leaderboard ?? undefined);
+}
+
 export interface CaptureRace {
   leadingSide: "Imperial" | "Devastation";
   pointsRemaining: number;
@@ -58,24 +67,29 @@ function factionParticipants(leaderboard: PlanetLeaderboard | undefined): number
   return leaderboard?.faction?.numParticipants ?? Infinity;
 }
 
-function factionPercentile(leaderboard: PlanetLeaderboard | undefined): number {
-  const rank = leaderboard?.faction?.myRank;
-  const numParticipants = leaderboard?.faction?.numParticipants;
-  if (rank == null || !numParticipants) return Infinity;
-  return rank / numParticipants;
-}
+export type DominationSortMode = "closestToCapture" | "imperialFirst" | "devastationFirst" | "highestPointsToCapture";
 
-export type DominationSortMode = "closestToCapture" | "imperialFirst" | "devastationFirst";
-
-// A negative pointsRemaining means a side has already crossed its conquest threshold - the planet
+// pointsRemaining <= 0 means a side has reached (or overshot) its conquest threshold - the planet
 // was just captured and hasn't dropped out of the active list yet, so it's no longer a live
-// opportunity worth surfacing near the top.
+// opportunity worth surfacing near the top. <= (not <) since exactly hitting the threshold is
+// still a capture, not "one point to go".
 function isJustCaptured(planet: CrusadePlanet): boolean {
   const race = computeCaptureRace(planet);
-  return race !== null && race.pointsRemaining < 0;
+  return race !== null && race.pointsRemaining <= 0;
 }
 
-function pointsRemaining(planet: CrusadePlanet): { imperial: number; devastation: number } {
+// Struggle-gated so an Expansion planet (never has struggleData, and can legitimately show 0/0
+// before its first leaderboard fetch) never gets swept into this - only real Domination cooldown
+// (post-capture lockout, or simply not fought over yet this stage) counts.
+function isInDominationCooldown(planet: CrusadePlanet): boolean {
+  return planet.struggleData != null && (planet.pointsFor ?? 0) === 0 && (planet.pointsAgainst ?? 0) === 0;
+}
+
+export function isDominationSunk(planet: CrusadePlanet): boolean {
+  return isJustCaptured(planet) || isInDominationCooldown(planet);
+}
+
+export function pointsRemaining(planet: CrusadePlanet): { imperial: number; devastation: number } {
   const progress = computeConquestProgress(planet);
   if (!progress) return { imperial: Infinity, devastation: Infinity };
   return {
@@ -90,6 +104,14 @@ function safeDiff(a: number, b: number): number {
   return a === b ? 0 : a - b;
 }
 
+// The larger of the two sides' total conquest thresholds - how many points it takes to flip the
+// planet at all, not how many are left. 0 (rather than Infinity) for a planet with no struggleData
+// yet, so it naturally sorts last under "highest first" without a separate NaN guard.
+function totalCaptureRequirement(planet: CrusadePlanet): number {
+  const progress = computeConquestProgress(planet);
+  return progress ? Math.max(progress.imperialThreshold, progress.devastationThreshold) : 0;
+}
+
 function compareBySortMode(mode: DominationSortMode, a: CrusadePlanet, b: CrusadePlanet): number {
   const remA = pointsRemaining(a);
   const remB = pointsRemaining(b);
@@ -100,42 +122,100 @@ function compareBySortMode(mode: DominationSortMode, a: CrusadePlanet, b: Crusad
       return safeDiff(remA.imperial, remB.imperial) || safeDiff(remA.devastation, remB.devastation);
     case "devastationFirst":
       return safeDiff(remA.devastation, remB.devastation) || safeDiff(remA.imperial, remB.imperial);
+    case "highestPointsToCapture":
+      return safeDiff(totalCaptureRequirement(b), totalCaptureRequirement(a)); // descending: biggest total first
   }
 }
 
-// Two-group sort: planets where the player has a faction rank come first (best percentile first -
-// "how am I already doing here"); the rest follow, ordered per sortMode, tie-broken by how few
-// faction participants they're competing against. Planets a side has already captured (see
-// isJustCaptured) always sink to the very bottom regardless of sortMode - they're stale, not
-// live opportunities.
-export function sortDominationPlanets(
+// Five-bucket partition shared by both Crusade phases, in priority order: live starred planets
+// come first (outranks being ranked - a planet the player deliberately flagged is a stronger
+// signal than an incidental leaderboard rank); then starred planets that are sunk (caller's isSunk
+// - e.g. Domination's already-captured-or-cooldown check) - a star keeps a planet near the top even
+// once it's no longer a live opportunity, it just falls behind other active stars; then ranked
+// (a faction rank always implies a side rank too, for the same planet); then unranked; non-starred
+// sunk planets go last. Each bucket is ordered by the caller's compare, so none of this grouping
+// disturbs whatever sort is currently selected.
+export function sortPlanetsRankedFirst(
   planets: CrusadePlanet[],
   leaderboardByPlanet: Map<string, PlanetLeaderboard>,
-  sortMode: DominationSortMode = "closestToCapture",
+  starredPlanetIds: ReadonlySet<string>,
+  compare: (a: CrusadePlanet, b: CrusadePlanet) => number,
+  isSunk: (planet: CrusadePlanet) => boolean = () => false,
 ): CrusadePlanet[] {
+  const starred: CrusadePlanet[] = [];
+  const starredSunk: CrusadePlanet[] = [];
   const ranked: CrusadePlanet[] = [];
-  const contested: CrusadePlanet[] = [];
-  const justCaptured: CrusadePlanet[] = [];
+  const unranked: CrusadePlanet[] = [];
+  const sunk: CrusadePlanet[] = [];
   for (const planet of planets) {
-    const leaderboard = leaderboardByPlanet.get(planet.planetId);
-    if (leaderboard?.faction?.myRank != null) {
+    if (starredPlanetIds.has(planet.planetId)) {
+      (isSunk(planet) ? starredSunk : starred).push(planet);
+    } else if (isSunk(planet)) {
+      sunk.push(planet);
+    } else if (leaderboardByPlanet.get(planet.planetId)?.faction?.myRank != null) {
       ranked.push(planet);
-    } else if (isJustCaptured(planet)) {
-      justCaptured.push(planet);
     } else {
-      contested.push(planet);
+      unranked.push(planet);
     }
   }
 
-  ranked.sort((a, b) => factionPercentile(leaderboardByPlanet.get(a.planetId)) - factionPercentile(leaderboardByPlanet.get(b.planetId)));
+  starred.sort(compare);
+  starredSunk.sort(compare);
+  ranked.sort(compare);
+  unranked.sort(compare);
+  sunk.sort(compare);
 
-  const byModeThenParticipants = (a: CrusadePlanet, b: CrusadePlanet) => {
-    const cmp = compareBySortMode(sortMode, a, b);
-    if (cmp !== 0) return cmp;
-    return factionParticipants(leaderboardByPlanet.get(a.planetId)) - factionParticipants(leaderboardByPlanet.get(b.planetId));
-  };
-  contested.sort(byModeThenParticipants);
-  justCaptured.sort(byModeThenParticipants);
+  return [...starred, ...starredSunk, ...ranked, ...unranked, ...sunk];
+}
 
-  return [...ranked, ...contested, ...justCaptured];
+// The rank each filter checks - side against the #25 row, faction against the #10 row (both are
+// among BENCHMARK_RANKS in fetch-crusade-data.ts, so they're always computed when present).
+const SIDE_FILTER_RANK = 25;
+const FACTION_FILTER_RANK = 10;
+
+// Fewer participants than the target rank means there's no real row at that rank to worry about -
+// treated as 0 points (per the caller's spec) so a filter threshold, which is always a positive
+// integer, never hides a planet on that basis alone.
+function pointsAtRank(result: PlanetLeaderboard["side"] | PlanetLeaderboard["faction"] | undefined, rank: number): number {
+  if (!result || result.numParticipants < rank) return 0;
+  return result.benchmarks.find((b) => b.rank === rank)?.points ?? 0;
+}
+
+// Empty or non-positive-integer input means "no filter" - only an actual positive integer
+// activates the corresponding threshold.
+export function parsePositiveIntFilter(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return null;
+  const n = Number(trimmed);
+  return Number.isInteger(n) && n > 0 ? n : null;
+}
+
+// A planet fails (is hidden) when its relevant leaderboard's target rank (see SIDE_FILTER_RANK/
+// FACTION_FILTER_RANK) already needs more points than the user's threshold - i.e. cracking that
+// rank is already out of reach. A planet with no leaderboard data loaded yet always passes (same
+// as pointsAtRank treating "no row at that rank" as 0) - a filter should never hide a planet just
+// because its data hasn't arrived, only once it positively demonstrates the threshold is exceeded.
+export function passesDominationFilters(leaderboard: PlanetLeaderboard | undefined, maxSide: number | null, maxFaction: number | null): boolean {
+  if (maxSide !== null && pointsAtRank(leaderboard?.side, SIDE_FILTER_RANK) > maxSide) return false;
+  if (maxFaction !== null && pointsAtRank(leaderboard?.faction, FACTION_FILTER_RANK) > maxFaction) return false;
+  return true;
+}
+
+export function sortDominationPlanets(
+  planets: CrusadePlanet[],
+  leaderboardByPlanet: Map<string, PlanetLeaderboard>,
+  starredPlanetIds: ReadonlySet<string>,
+  sortMode: DominationSortMode = "closestToCapture",
+): CrusadePlanet[] {
+  return sortPlanetsRankedFirst(
+    planets,
+    leaderboardByPlanet,
+    starredPlanetIds,
+    (a, b) => {
+      const cmp = compareBySortMode(sortMode, a, b);
+      if (cmp !== 0) return cmp;
+      return factionParticipants(leaderboardByPlanet.get(a.planetId)) - factionParticipants(leaderboardByPlanet.get(b.planetId));
+    },
+    isDominationSunk,
+  );
 }

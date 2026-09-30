@@ -1,11 +1,5 @@
+import { sha256Hex } from "./api/sha256";
 import type { Environment } from "./api/types";
-
-async function sha256Hex(value: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return Array.from(new Uint8Array(digest))
-    .map((b) => b.toString(16).padStart(2, "0"))
-    .join("");
-}
 
 // Privacy-preserving usage tracking: only a SHA-256 hash of userId ever leaves the browser for
 // this, never the raw id. QA/dev traffic is excluded so it doesn't pollute real usage numbers.
@@ -21,5 +15,21 @@ export async function trackUsage(userId: string, environment: Environment): Prom
     });
   } catch {
     // best-effort, see above
+  }
+}
+
+// Same shape as trackUsage above, for a visitor who hasn't logged in - anonymousId comes from
+// getOrCreateAnonymousId() (../api/anonymous-id.ts), never a real userId/IP. No environment gate:
+// the anonymous path only exists on the web (AnonymousCrusadeSection), so it's implicitly prod-only.
+export async function trackAnonymousUsage(anonymousId: string): Promise<void> {
+  try {
+    const userHash = await sha256Hex(anonymousId);
+    await fetch("/api/track", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userHash }),
+    });
+  } catch {
+    // best-effort, see trackUsage above
   }
 }

@@ -1,6 +1,9 @@
 // Ported 1:1 from src-tauri/src/loki.rs (and src-tauri/src/crusades.rs) - keep them in sync.
 // This is the CORS-workaround proxy the web build needs in place of that Rust code (a browser
-// can't call Snowprint directly).
+// can't call Snowprint directly). The *WithSession exports (fetchCrusadeDataWithSession,
+// fetchLeaderboardDataWithSession, fetchLeaderboardTextWithSession) and the exported
+// bootstrapSession/Session/environmentConfig are TypeScript-only, used by worker/poller.ts to reuse
+// one session across many calls - no Rust equivalent needed since Tauri never runs the poller.
 import md5 from "js-md5";
 
 // Confirmed via real Proxyman captures: the actual game client reuses this exact trio unchanged
@@ -48,7 +51,7 @@ const QA_CONFIG: EnvironmentConfig = {
   builtInMultiConfigVersion: "34c80d71f65bd74deb6ba74f01d1c725",
 };
 
-function environmentConfig(environment: string): EnvironmentConfig {
+export function environmentConfig(environment: string): EnvironmentConfig {
   if (environment === "prod") return PROD_CONFIG;
   if (environment === "qa") return QA_CONFIG;
   throw new Error(`Unknown environment: ${environment}`);
@@ -69,7 +72,16 @@ function envelope(playerEventType: string, playerEventData: unknown, config: Env
   };
 }
 
-async function post(url: string, body: unknown): Promise<any> {
+interface PostResult {
+  parsed: any;
+  // The exact response bytes, kept alongside `parsed` so a caller that only needs to store the
+  // response (worker/poller.ts) never has to JSON.stringify(parsed) back into a string - that
+  // would just recreate (at real CPU cost) the exact text already sitting right here. `parsed` is
+  // only needed for in-memory decisions and the SUCCESS check every caller already required.
+  text: string;
+}
+
+async function post(url: string, body: unknown): Promise<PostResult> {
   // Without an explicit timeout, a stalled connection would hang the request forever - matches
   // the 20s reqwest timeout on the Rust side, added after a real hung request froze the whole app.
   const res = await fetch(url, {
@@ -97,10 +109,57 @@ async function post(url: string, body: unknown): Promise<any> {
   if (parsed?.eventResult?.eventResultType !== "SUCCESS") {
     throw new Error(`${url} returned an application error: ${JSON.stringify(parsed)}`);
   }
-  return parsed;
+  return { parsed, text };
 }
 
-interface Session {
+// A real capture confirmed "eventResultType":"SUCCESS" sits at ~character 35 of a GET_LEADERBOARD_2
+// response - well before the (potentially 100KB+) leaderboard data that follows. Scanning only a
+// bounded prefix for this exact marker is far cheaper than a full JSON.parse of the whole response,
+// which matters here because postForTextOnly (below) is the hot path: called once per planet per
+// poller tick, for a caller that never reads the parsed object at all (only stores the text).
+// Exported for direct unit testing.
+const SUCCESS_PREFIX_SCAN_CHARS = 300;
+export function looksLikeSuccess(text: string): boolean {
+  return text.slice(0, SUCCESS_PREFIX_SCAN_CHARS).includes('"eventResultType":"SUCCESS"');
+}
+
+// Text-only sibling of post() - skips JSON.parse entirely on the (common) success path, since the
+// caller (fetchLeaderboardTextWithSession, used only by worker/poller.ts's per-planet loop) never
+// needs the parsed object. Falls back to a real parse only on the rare path where the cheap prefix
+// check doesn't confirm success - that fallback re-does the exact check post() performs, so a false
+// negative from the cheap scan (an unusual response shape) still resolves to success correctly
+// rather than wrongly failing a genuinely successful call.
+async function postForTextOnly(url: string, body: unknown): Promise<string> {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(20_000),
+  }).catch((e) => {
+    throw new Error(`request to ${url} failed: ${e}`);
+  });
+
+  const text = await res.text();
+  if (!res.ok) {
+    throw new Error(`${url} returned HTTP ${res.status}: ${text.slice(0, 300)}`);
+  }
+  if (looksLikeSuccess(text)) {
+    return text;
+  }
+
+  let parsed: any;
+  try {
+    parsed = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`failed to parse JSON response from ${url}: ${e}`);
+  }
+  if (parsed?.eventResult?.eventResultType === "SUCCESS") {
+    return text;
+  }
+  throw new Error(`${url} returned an application error: ${JSON.stringify(parsed)}`);
+}
+
+export interface Session {
   config: EnvironmentConfig;
   baseUrl: string;
   sessionId: string;
@@ -110,8 +169,11 @@ interface Session {
 // capture). CONNECT exchanges the account's clientSecret/snowId for a sessionId; every call
 // after that uses the sessionId-suffixed URL. Shared by every function that needs a session
 // (GET_PLAYER, GET_CRUSADE, GET_LEADERBOARD_2, ...) since the sessionId is valid across both the
-// player/player2 and game-event/game3 URL trees, not just the one it was minted under.
-async function bootstrapSession(environment: string, userId: string, clientSecret: string, snowId: string): Promise<Session> {
+// player/player2 and game-event/game3 URL trees, not just the one it was minted under. Exported so
+// worker/poller.ts (the scheduled background poller) can bootstrap once and reuse the same Session
+// across many calls, both within and across cron ticks - every other caller here still gets a
+// fresh session per call via the *FromLoki wrappers below.
+export async function bootstrapSession(environment: string, userId: string, clientSecret: string, snowId: string): Promise<Session> {
   const config = environmentConfig(environment);
   const baseUrl = `${config.baseUrl}/${userId}`;
 
@@ -170,7 +232,7 @@ async function bootstrapSession(environment: string, userId: string, clientSecre
   if (snowId) connectData.snowId = snowId;
 
   const connectBody = envelope("CONNECT", connectData, config);
-  const connectResponse = await post(baseUrl, connectBody);
+  const { parsed: connectResponse } = await post(baseUrl, connectBody);
   const sessionId = connectResponse?.eventResult?.eventResponseData?.userData?.sessionId;
   if (!sessionId) {
     throw new Error("CONNECT response didn't contain a sessionId - is clientSecret/snowId correct?");
@@ -191,7 +253,8 @@ export async function fetchPlayerDataFromLoki(
   const { config, baseUrl, sessionId } = await bootstrapSession(environment, userId, clientSecret, snowId);
   const sessionUrl = `${baseUrl}/sessionId/${sessionId}`;
   const getPlayerBody = envelope("GET_PLAYER", { storefrontCountryCode: "NotAvailable" }, config);
-  return post(sessionUrl, getPlayerBody);
+  const { parsed } = await post(sessionUrl, getPlayerBody);
+  return parsed;
 }
 
 // Reverse-engineered this session from 5 real captures (2 different gameEventTypes) - every
@@ -253,7 +316,7 @@ function gameEventEnvelope(gameEventType: string, eventData: unknown) {
   };
 }
 
-async function postGameEvent(url: string, body: unknown): Promise<any> {
+async function postGameEvent(url: string, body: unknown): Promise<PostResult> {
   const res = await fetch(url, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -277,7 +340,18 @@ async function postGameEvent(url: string, body: unknown): Promise<any> {
   if (parsed?.eventResults?.[0]?.eventResultType !== "SUCCESS") {
     throw new Error(`${url} returned an application error: ${JSON.stringify(parsed)}`);
   }
-  return parsed;
+  return { parsed, text };
+}
+
+// Session-accepting variant of fetchCrusadeDataFromLoki below, for a caller that already has a
+// bootstrapped Session and wants to reuse it (worker/poller.ts, across many calls/ticks) instead
+// of paying for a fresh APP_START+CONNECT every time. Returns both `parsed` (for the poller's own
+// in-memory phase/id decisions) and `text` (the exact response bytes, so the poller can store it
+// verbatim instead of re-serializing `parsed` back into a string at real CPU cost).
+export async function fetchCrusadeDataWithSession(session: Session, userId: string): Promise<PostResult> {
+  const gameEventUrl = `${session.config.gameEventBaseUrl}/${userId}/sessionId/${session.sessionId}`;
+  const body = gameEventEnvelope("GET_CRUSADE", {});
+  return postGameEvent(gameEventUrl, body);
 }
 
 // GET_CRUSADE returns the current crusade season's phase schedule and per-planet faction
@@ -288,10 +362,9 @@ export async function fetchCrusadeDataFromLoki(
   clientSecret: string,
   snowId: string,
 ): Promise<unknown> {
-  const { config, sessionId } = await bootstrapSession(environment, userId, clientSecret, snowId);
-  const gameEventUrl = `${config.gameEventBaseUrl}/${userId}/sessionId/${sessionId}`;
-  const body = gameEventEnvelope("GET_CRUSADE", {});
-  return postGameEvent(gameEventUrl, body);
+  const session = await bootstrapSession(environment, userId, clientSecret, snowId);
+  const { parsed } = await fetchCrusadeDataWithSession(session, userId);
+  return parsed;
 }
 
 // GET_LEADERBOARD_2 reuses the ordinary playerEvent envelope (no "d" signature needed - only
@@ -306,9 +379,27 @@ export async function fetchLeaderboardDataFromLoki(
   snowId: string,
   leaderboardIds: string[],
 ): Promise<unknown> {
-  const { config, baseUrl, sessionId } = await bootstrapSession(environment, userId, clientSecret, snowId);
-  const sessionUrl = `${baseUrl}/sessionId/${sessionId}`;
+  const session = await bootstrapSession(environment, userId, clientSecret, snowId);
+  const { parsed } = await fetchLeaderboardDataWithSession(session, userId, leaderboardIds);
+  return parsed;
+}
+
+// Session-accepting variant, same reasoning as fetchCrusadeDataWithSession above.
+export async function fetchLeaderboardDataWithSession(session: Session, userId: string, leaderboardIds: string[]): Promise<PostResult> {
+  const sessionUrl = `${session.baseUrl}/sessionId/${session.sessionId}`;
   const leaderboards = leaderboardIds.map((leaderboardId) => ({ leaderboardId, participantId: userId }));
-  const body = envelope("GET_LEADERBOARD_2", { leaderboards }, config);
+  const body = envelope("GET_LEADERBOARD_2", { leaderboards }, session.config);
   return post(sessionUrl, body);
+}
+
+// Text-only variant for worker/poller.ts's per-planet loop specifically - that caller only ever
+// stores the response (never reads a parsed object out of it), so this skips JSON.parse entirely
+// on the common success path via postForTextOnly/looksLikeSuccess above. Every other caller of a
+// leaderboard fetch (the live per-user path, fetchLeaderboardDataFromLoki/WithSession) keeps full
+// parsing, since it genuinely needs the parsed object.
+export async function fetchLeaderboardTextWithSession(session: Session, userId: string, leaderboardIds: string[]): Promise<string> {
+  const sessionUrl = `${session.baseUrl}/sessionId/${session.sessionId}`;
+  const leaderboards = leaderboardIds.map((leaderboardId) => ({ leaderboardId, participantId: userId }));
+  const body = envelope("GET_LEADERBOARD_2", { leaderboards }, session.config);
+  return postForTextOnly(sessionUrl, body);
 }

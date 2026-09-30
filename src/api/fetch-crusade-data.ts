@@ -16,22 +16,12 @@ import type {
 const planetNameById = new Map((planetData as { planetId: string; name: string }[]).map((p) => [p.planetId, p.name]));
 const planetZoneById = new Map((planetData as { planetId: string; zone: number }[]).map((p) => [p.planetId, p.zone]));
 
-// Both transports replay APP_START -> CONNECT -> GET_CRUSADE server-side, each individually
-// bounded at 20s - same reasoning as fetchPlayerData's timeout.
-export async function fetchCrusadeData(
-  environment: Environment,
-  webCredentials?: { userId: string; clientSecret: string },
-): Promise<CrusadeData> {
-  const response = isTauri()
-    ? await (async () => {
-        const credentials = await invokeWithTimeout<Credentials>("find_credentials", { environment }, 20_000);
-        return invokeWithTimeout<any>("fetch_crusade_data", { environment, ...credentials }, 60_000);
-      })()
-    : await fetchWithTimeout<any>("/api/fetch-crusade-data", { environment, ...webCredentials, snowId: "" }, 60_000);
-
-  const data = response?.eventResults?.[0]?.eventResponseData;
+// Turns a raw GET_CRUSADE eventResponseData object into a CrusadeData - factored out so
+// crusade-cache-seed.ts can reuse it against a cached/replayed response (from
+// /api/crusade-cache, see worker/crusade-cache.ts) exactly as this module's own live fetch below
+// does, with no second implementation.
+export function mapCrusadeResponseData(data: any): CrusadeData {
   const { phase, activeZone } = findActivePhase(data?.downtimePhase, data?.crusadePhases ?? [], data?.strugglePhase);
-
   return {
     crusadeId: data?.crusadeId ?? "",
     seasonNumber: data?.seasonNumber ?? 0,
@@ -53,6 +43,22 @@ export async function fetchCrusadeData(
       zone: planetZoneById.get(p.planetId) ?? null,
     })),
   };
+}
+
+// Both transports replay APP_START -> CONNECT -> GET_CRUSADE server-side, each individually
+// bounded at 20s - same reasoning as fetchPlayerData's timeout.
+export async function fetchCrusadeData(
+  environment: Environment,
+  webCredentials?: { userId: string; clientSecret: string },
+): Promise<CrusadeData> {
+  const response = isTauri()
+    ? await (async () => {
+        const credentials = await invokeWithTimeout<Credentials>("find_credentials", { environment }, 20_000);
+        return invokeWithTimeout<any>("fetch_crusade_data", { environment, ...credentials }, 60_000);
+      })()
+    : await fetchWithTimeout<any>("/api/fetch-crusade-data", { environment, ...webCredentials, snowId: "" }, 60_000);
+
+  return mapCrusadeResponseData(response?.eventResults?.[0]?.eventResponseData);
 }
 
 interface RawCrusadePhase {
@@ -102,7 +108,11 @@ export function resolveMyFactionId(crusadeData: Pick<CrusadeData, "chosenSide" |
   return crusadeData.chosenSide.toLowerCase() === "for" ? crusadeData.forFactionId : crusadeData.againstFactionId;
 }
 
-function leaderboardIdsForPlanet(crusadeId: string, seasonNumber: number, planetId: string) {
+// Exported so crusade-cache-seed.ts can build the same factionFor/factionAgainst ids to read back
+// out of the cache's stored `leaderboards` blob (see worker/crusade-cache.ts) - the poller
+// (worker/poller.ts) builds its own copy of just this half, since it can't import this
+// Tauri-coupled module directly.
+export function leaderboardIdsForPlanet(crusadeId: string, seasonNumber: number, planetId: string) {
   const base = `${crusadeId}_${seasonNumber}_${planetId}`;
   return {
     factionFor: `crusadeFaction:crusade_leaderboard_planet_side_factions_${base}_for`,
@@ -110,6 +120,14 @@ function leaderboardIdsForPlanet(crusadeId: string, seasonNumber: number, planet
     playerFor: `crusadePlayer:crusade_leaderboard_planet_side_players_${base}_for`,
     playerAgainst: `crusadePlayer:crusade_leaderboard_planet_side_players_${base}_against`,
   };
+}
+
+// The per-faction player leaderboard (all players playing as one specific faction, ranked against
+// each other) - unlike the side leaderboard above, this isn't split _for/_against, one id per
+// faction. Exported so crusade-cache-seed.ts can build this for an arbitrary *picked* faction, not
+// just fetchPlanetLeaderboard's own myFactionId.
+export function factionPlayerLeaderboardId(crusadeId: string, seasonNumber: number, planetId: string, factionId: string): string {
+  return `crusadePlayer:crusade_leaderboard_planet_faction_players_${crusadeId}_${seasonNumber}_${planetId}_${factionId}`;
 }
 
 interface LeaderboardRow {
@@ -137,27 +155,38 @@ function parseRows(rows: any): LeaderboardRow[] {
 // no numParticipants/topEntries, indistinguishable at a glance from a genuinely empty
 // leaderboard. Requiring numParticipants here is what actually distinguishes "no entry" (a typo)
 // from "entry exists, player just isn't on it" (a real absence).
-export function readLeaderboard(leaderboards: any, leaderboardId: string): RawLeaderboardEntry | null {
+export function readLeaderboard(leaderboards: any, leaderboardId: string, myUserId: string): RawLeaderboardEntry | null {
   const entry = leaderboards?.[leaderboardId];
   if (!entry || typeof entry.numParticipants !== "number") return null;
+  const topEntries = parseRows(entry.topEntries);
+  const localEntries = parseRows(entry.localEntries);
+  // Confirmed by the user: the server only sends myRank/myPoints at all when the player's own
+  // rank falls outside topEntries - if they're already visible there (e.g. sitting at #1), those
+  // fields are omitted entirely rather than sent as null, so the player has to be found by
+  // matching their own participantId (== the userId the request was made with) within topEntries
+  // (or localEntries, on the off chance it's populated without myRank) instead.
+  const myRow = entry.myRank == null ? (topEntries.find((e) => e.participantId === myUserId) ?? localEntries.find((e) => e.participantId === myUserId)) : undefined;
   return {
     numParticipants: entry.numParticipants,
-    // Confirmed by the user: myRank comes back 0-based from the API (unlike topEntries[].position,
-    // which is also 0-based but already handled correctly via `position === rank - 1` in
-    // buildBenchmarks) - +1 here so the displayed rank matches the #1/#10/#25 benchmarks it's
-    // compared against.
-    myRank: entry.myRank != null ? entry.myRank + 1 : null,
-    myPoints: entry.myPoints ?? null,
-    topEntries: parseRows(entry.topEntries),
-    localEntries: parseRows(entry.localEntries),
+    // myRank comes back 0-based from the API (unlike topEntries[].position, which is also 0-based
+    // but already handled correctly via `position === rank - 1` in buildBenchmarks) - +1 here so
+    // the displayed rank matches the #1/#10/#25 benchmarks it's compared against. myRow's position
+    // is already 0-based the same way, so it gets the same +1.
+    myRank: entry.myRank != null ? entry.myRank + 1 : myRow ? myRow.position + 1 : null,
+    myPoints: entry.myPoints ?? myRow?.points ?? null,
+    topEntries,
+    localEntries,
   };
 }
 
-function topFactionStandings(entry: RawLeaderboardEntry | null): CrusadeFactionStanding[] {
+// Exported for reuse by crusade-cache-seed.ts, which calls this against a leaderboard entry read
+// back out of the cache (via readLeaderboard, also exported below) instead of a live fetch.
+export function topFactionStandings(entry: RawLeaderboardEntry | null): CrusadeFactionStanding[] {
   return (entry?.topEntries ?? []).filter((e) => e.factionId).map((e) => ({ factionId: e.factionId!, points: e.points }));
 }
 
-// Ranks 1/5/10/25 are topEntries indices 0/4/9/24 (0-indexed position field).
+// The default collapsed view (LeaderboardBreakdownCell) - omitted individually (not filled in from
+// other ranks) when that exact rank doesn't exist, e.g. #25 on a leaderboard under 25 participants.
 const BENCHMARK_RANKS = [1, 5, 10, 25];
 
 // A player can "hop" planets and end up on a different side per-planet than their season-level
@@ -170,21 +199,33 @@ function pickMine(forEntry: RawLeaderboardEntry | null, againstEntry: RawLeaderb
   return null;
 }
 
-const MAX_FALLBACK_BENCHMARK_ROWS = 5;
-
 function buildBenchmarks(entry: RawLeaderboardEntry): LeaderboardBenchmark[] {
-  const benchmarkRows = BENCHMARK_RANKS.filter((rank) => entry.topEntries.some((e) => e.position === rank - 1)).map((rank) => ({
+  return BENCHMARK_RANKS.filter((rank) => entry.topEntries.some((e) => e.position === rank - 1)).map((rank) => ({
     rank,
     points: entry.topEntries.find((e) => e.position === rank - 1)!.points,
   }));
-  if (benchmarkRows.length > 1) return benchmarkRows;
+}
 
-  // Too few participants for #1/#5/#10/#25 to be meaningful (at most one matched) - show
-  // whatever top entries actually exist instead of an almost-empty (or entirely empty) list.
-  return [...entry.topEntries]
-    .sort((a, b) => a.position - b.position)
-    .slice(0, MAX_FALLBACK_BENCHMARK_ROWS)
-    .map((e) => ({ rank: e.position + 1, points: e.points }));
+// The expanded view's full top-25 list (as many of the real rows as exist), ascending by rank.
+function buildTopEntries(entry: RawLeaderboardEntry): LeaderboardBenchmark[] {
+  return [...entry.topEntries].sort((a, b) => a.position - b.position).map((e) => ({ rank: e.position + 1, points: e.points }));
+}
+
+// The expanded view's "your rank +/-2" window - empty when there's no personal rank to center it
+// on. localEntries only comes back populated when myRank doesn't land in topEntries (see
+// readLeaderboard) and may cover a wider window than +/-2, so both sources get pooled and clipped
+// to exactly that range; deduping by position covers the (normally impossible) case of the same
+// row appearing in both.
+function buildNearMe(entry: RawLeaderboardEntry): LeaderboardBenchmark[] {
+  if (entry.myRank == null) return [];
+  const byPosition = new Map<number, LeaderboardRow>();
+  for (const row of [...entry.topEntries, ...entry.localEntries]) {
+    const rank = row.position + 1;
+    if (rank >= entry.myRank - 2 && rank <= entry.myRank + 2) byPosition.set(row.position, row);
+  }
+  return [...byPosition.values()]
+    .map((row) => ({ rank: row.position + 1, points: row.points }))
+    .sort((a, b) => a.rank - b.rank);
 }
 
 // chosenSide is only consulted as a fallback - when the player has no personal rank on either
@@ -203,7 +244,8 @@ export function mergeSideLeaderboard(
       myRank: mine.myRank,
       myPoints: mine.myPoints,
       benchmarks: buildBenchmarks(mine),
-      referenceScore: pickReferenceScore(mine),
+      topEntries: buildTopEntries(mine),
+      nearMe: buildNearMe(mine),
     };
   }
   const fallback = chosenSide.toLowerCase() === "for" ? forEntry : againstEntry;
@@ -213,20 +255,9 @@ export function mergeSideLeaderboard(
     myRank: null,
     myPoints: null,
     benchmarks: buildBenchmarks(fallback),
-    referenceScore: pickReferenceScore(fallback),
+    topEntries: buildTopEntries(fallback),
+    nearMe: [],
   };
-}
-
-// A representative "how competitive is this planet" figure, used to sort the planet list: the
-// score at the top-10% rank if it's visible in topEntries (only the top 25 rows are ever
-// returned), else the deepest visible rank (#25) as a fallback. E.g. 130 participants -> rank 13
-// (ceil(130 * 0.1)), which is within the top-25 window, so that rank's score is used directly;
-// with, say, 1000 participants the top-10% rank (100) isn't visible at all, so #25 substitutes.
-export function pickReferenceScore(entry: RawLeaderboardEntry): LeaderboardBenchmark | null {
-  const top10Rank = Math.ceil(entry.numParticipants * 0.1);
-  const targetRank = Math.min(top10Rank, 25);
-  const points = entry.topEntries.find((e) => e.position === targetRank - 1)?.points;
-  return points === undefined ? null : { rank: targetRank, points };
 }
 
 // Unlike the side (_players) leaderboard, the per-faction leaderboard
@@ -243,7 +274,8 @@ export function buildFactionLeaderboard(entry: RawLeaderboardEntry | null): Fact
     myRank: entry.myRank,
     myPoints: entry.myPoints,
     benchmarks: buildBenchmarks(entry),
-    referenceScore: pickReferenceScore(entry),
+    topEntries: buildTopEntries(entry),
+    nearMe: buildNearMe(entry),
   };
 }
 
@@ -278,20 +310,19 @@ export async function fetchPlanetLeaderboard(
   const ids = leaderboardIdsForPlanet(crusadeId, seasonNumber, planetId);
   const sideLeaderboards = await fetchLeaderboards(environment, credentials, [ids.factionFor, ids.factionAgainst, ids.playerFor, ids.playerAgainst]);
 
-  const factionFor = readLeaderboard(sideLeaderboards, ids.factionFor);
-  const factionAgainst = readLeaderboard(sideLeaderboards, ids.factionAgainst);
-  const playerFor = readLeaderboard(sideLeaderboards, ids.playerFor);
-  const playerAgainst = readLeaderboard(sideLeaderboards, ids.playerAgainst);
+  const factionFor = readLeaderboard(sideLeaderboards, ids.factionFor, credentials.userId);
+  const factionAgainst = readLeaderboard(sideLeaderboards, ids.factionAgainst, credentials.userId);
+  const playerFor = readLeaderboard(sideLeaderboards, ids.playerFor, credentials.userId);
+  const playerAgainst = readLeaderboard(sideLeaderboards, ids.playerAgainst, credentials.userId);
 
   // myFactionId comes from resolveMyFactionId (GET_CRUSADE's chosenSide/forFactionId/
   // againstFactionId) - always known up front, so this only skips as a defensive no-op if
   // GET_CRUSADE ever omits those fields (fetchCrusadeData defaults them to "").
   let faction: FactionLeaderboardResult | null = null;
   if (myFactionId) {
-    const base = `${crusadeId}_${seasonNumber}_${planetId}`;
-    const factionLeaderboardId = `crusadePlayer:crusade_leaderboard_planet_faction_players_${base}_${myFactionId}`;
+    const factionLeaderboardId = factionPlayerLeaderboardId(crusadeId, seasonNumber, planetId, myFactionId);
     const factionLeaderboards = await fetchLeaderboards(environment, credentials, [factionLeaderboardId]);
-    faction = buildFactionLeaderboard(readLeaderboard(factionLeaderboards, factionLeaderboardId));
+    faction = buildFactionLeaderboard(readLeaderboard(factionLeaderboards, factionLeaderboardId, credentials.userId));
   }
 
   return {

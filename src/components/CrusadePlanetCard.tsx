@@ -1,6 +1,7 @@
 import { FactionBadge, LeaderboardBreakdownCell, SidePercentCell } from "./crusade-cells";
 import { PlanetFetchTimestamp } from "./PlanetFetchTimestamp";
 import { RefreshIconButton } from "./RefreshIconButton";
+import { StarIconButton } from "./StarIconButton";
 import { Spinner } from "./Spinner";
 import type { CrusadePlanet, PlanetRefreshEntry } from "../api/types";
 
@@ -9,10 +10,13 @@ const labelClass = "text-xs font-medium opacity-70";
 interface CrusadePlanetCardProps {
   planet: CrusadePlanet;
   refreshEntry: PlanetRefreshEntry;
-  onRefresh: () => void;
+  onRefresh?: () => void;
+  isFavorited: boolean;
+  onToggleFavorite?: () => void;
+  starDisabled?: boolean;
 }
 
-export function CrusadePlanetCard({ planet, refreshEntry, onRefresh }: CrusadePlanetCardProps) {
+export function CrusadePlanetCard({ planet, refreshEntry, onRefresh, isFavorited, onToggleFavorite, starDisabled }: CrusadePlanetCardProps) {
   const leaderboard = refreshEntry.leaderboard;
   return (
     <div className="relative">
@@ -27,12 +31,15 @@ export function CrusadePlanetCard({ planet, refreshEntry, onRefresh }: CrusadePl
         }`}
       >
         <div className="flex items-center justify-between gap-2">
-          <span className="font-medium">{planet.name}</span>
+          <div className="flex items-center gap-1">
+            {onToggleFavorite && <StarIconButton isFavorited={isFavorited} onToggle={onToggleFavorite} disabled={starDisabled} />}
+            <span className="font-medium">{planet.name}</span>
+          </div>
           <SidePercentCell pointsFor={planet.pointsFor} pointsAgainst={planet.pointsAgainst} />
         </div>
         <div className="flex items-center justify-end gap-1">
           <PlanetFetchTimestamp entry={refreshEntry} />
-          <RefreshIconButton onRefresh={onRefresh} isLoading={refreshEntry.isLoading} />
+          {onRefresh && <RefreshIconButton onRefresh={onRefresh} isLoading={refreshEntry.isLoading} />}
         </div>
         <div className="grid grid-cols-2 gap-2">
           <div className="flex flex-col gap-1">
