@@ -177,6 +177,58 @@ export interface PlanetRefreshEntry {
   isLoading: boolean;
 }
 
+// GET_PVP_STATE's per-encounter opponent preview - see pvp/pvp-view-model.ts for how this gets
+// turned into display data. Field names here match the raw wire shape (camelCase as sent), not
+// this repo's usual naming - keep it that way so a diff against a fresh capture stays obvious.
+export interface RawPvpItemInstance {
+  itemId: string;
+  level: number;
+}
+
+export interface RawPvpUnit {
+  progressionIndex?: number;
+  xpLevel?: number;
+  // Absent on Machine of War units - they have no rank.
+  rank?: number;
+  active?: number;
+  passive?: number;
+  upgrades?: number[];
+  // Absent on Machine of War units - they have no equipment slots.
+  items?: Record<string, string>; // SlotN -> itemInstanceId
+  starLevel?: number;
+}
+
+export interface RawPvpOpponent {
+  userId: string;
+  displayName: string;
+  avatar: string;
+  avatarFrameId?: string;
+  rating: number;
+  level: number;
+  position: number;
+  units: {
+    units: Record<string, RawPvpUnit>;
+    lineup: { pvp: string[] };
+    mowLineup: { pvp: string };
+  };
+  items: {
+    items: Record<string, RawPvpItemInstance>;
+  };
+}
+
+export interface RawPvpEncounter {
+  opponent: RawPvpOpponent;
+  ratingGain: number;
+  ratingLoss: number;
+  boardId: string;
+  spawnPointsSet: number;
+}
+
+export interface RawPvpState {
+  playerPosition: number | null;
+  pvpEncounters: RawPvpEncounter[];
+}
+
 export interface PlayerResources {
   stamina: number;
   staminaNextTokenAt: number | null;

@@ -10,6 +10,7 @@ import { OperationsCards } from "./components/OperationsCards";
 import { CharactersTable } from "./components/CharactersTable";
 import { MowTable } from "./components/MowTable";
 import { GuildChatTab } from "./components/GuildChatTab";
+import { ArenaTab } from "./components/ArenaTab";
 import { BoardCoverageTab } from "./components/BoardCoverageTab";
 import { CrusadeTab } from "./components/CrusadeTab";
 import { MonitorTab } from "./components/MonitorTab";
@@ -48,6 +49,7 @@ const TABS = [
   { id: "crusade", label: "Crusade" },
   { id: "monitor", label: "Monitor" },
   { id: "guildchat", label: "Guild Chat" },
+  { id: "arena", label: "Arena" },
   { id: "characters", label: "Characters" },
   { id: "mows", label: "Machines of War" },
   { id: "coverage", label: "Board Coverage" },
@@ -981,6 +983,13 @@ export function App() {
             )}
             {activeTab === "mows" && <MowTable machinesOfWar={machinesOfWar} />}
             {activeTab === "guildchat" && <GuildChatTab environment={environment} />}
+            {activeTab === "arena" && (
+              <ArenaTab
+                environment={environment}
+                pvpPosition={resources?.pvpPosition ?? null}
+                webCredentials={{ userId, clientSecret }}
+              />
+            )}
             {activeTab === "coverage" && <BoardCoverageTab />}
             {activeTab === "heroquests" && <HeroQuestsTab jars={heroQuestJars} />}
             {activeTab === "crusade" && (
