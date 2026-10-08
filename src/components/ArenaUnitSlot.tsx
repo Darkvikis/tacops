@@ -2,11 +2,11 @@ import { ArenaEquipmentSlot } from "./ArenaEquipmentSlot";
 import { rarityHaloFilter } from "../rarity/rarity-halo";
 import type { PvpUnitSlot } from "../pvp/pvp-view-model";
 
-// 83px portrait (64px * 1.3) - sized up ~30% so 3 fit per row within a card instead of 4, per
-// feedback. Ability levels are an absolutely-positioned overlay INSIDE the same relative+isolate
-// wrapper as the portrait/halo/rank badge - not a separate block below pulled up via negative
-// margin (the earlier approach) - so they're guaranteed to paint on top of both, per feedback that
-// they weren't reliably drawn above the halo/portrait that way.
+// 83px portrait (64px * 1.3) - grown ~30% so 3 fit per row within a card instead of 4. Ability
+// levels sit back where they originally did (a separate block below the portrait, pulled up via
+// negative margin to overlap its bottom edge) - but now with an explicit `relative z-10` so they
+// reliably paint in front of the portrait/halo's own stacking context (isolation: isolate below),
+// rather than relying on implicit DOM-order painting across that boundary.
 export function ArenaUnitSlot({ unit }: { unit: PvpUnitSlot }) {
   return (
     <div className="flex w-[83px] flex-col items-center gap-1">
@@ -34,10 +34,10 @@ export function ArenaUnitSlot({ unit }: { unit: PvpUnitSlot }) {
             className="absolute -bottom-[10px] left-1/2 h-[31px] w-[31px] -translate-x-1/2 rounded-full"
           />
         )}
-        <div className="absolute inset-x-0 bottom-[18px] flex justify-between px-1 text-xs font-semibold text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">
-          <span title="Active ability level">{unit.activeLevel ?? "-"}</span>
-          <span title="Passive ability level">{unit.passiveLevel ?? "-"}</span>
-        </div>
+      </div>
+      <div className="relative z-10 -mt-[18px] flex w-full justify-between px-1 text-xs font-semibold text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.9)]">
+        <span title="Active ability level">{unit.activeLevel ?? "-"}</span>
+        <span title="Passive ability level">{unit.passiveLevel ?? "-"}</span>
       </div>
       {unit.kind === "character" && (
         <div className="mt-1 flex gap-1">
