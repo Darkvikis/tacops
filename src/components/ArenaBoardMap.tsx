@@ -13,8 +13,16 @@ interface ArenaBoardMapProps {
 // etc., per the user's request) at their real spawn points. spawn-points.json's (x, y) are native
 // pixel coordinates against the delivered board PNG (confirmed by datamine_tacticus drawing its
 // own output back onto that same PNG) - positioned here as a percentage of the image's natural
-// size (read via onLoad) rather than raw px, so this still lines up however large the image
-// actually renders at.
+// size rather than raw px, so this still lines up however large the image actually renders at.
+//
+// naturalSize has two ways in, not just onLoad: a board that's already in the browser's cache
+// (a repeat opponent board across a refresh, two of today's three opponents sharing a board, or
+// just revisiting the tab later in the session) can resolve from cache without the <img> firing a
+// load event at all - the board art still displays fine either way (that doesn't depend on load
+// firing), but naturalSize staying unset meant the portraits silently never appeared, even though
+// the underlying spawn-point data was correct. handleImgRef checks img.complete the moment the DOM
+// node is attached and reads the size synchronously when it's already cached; onLoad still covers
+// the normal first-fetch case.
 export function ArenaBoardMap({ boardId, spawnPointsSet, lineup }: ArenaBoardMapProps) {
   const [manifest, setManifest] = useState<SpawnPointManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,12 +42,27 @@ export function ArenaBoardMap({ boardId, spawnPointsSet, lineup }: ArenaBoardMap
     };
   }, []);
 
+  // boardId is stable for the lifetime of a given ArenaOpponentCard (keyed by userId in
+  // ArenaTab.tsx), but reset here too in case that ever stops being true - a stale naturalSize
+  // from a previous board would otherwise place this board's portraits using the wrong image's
+  // dimensions.
+  useEffect(() => {
+    setNaturalSize(null);
+  }, [boardId]);
+
+  function handleImgRef(img: HTMLImageElement | null) {
+    if (img && img.complete && img.naturalWidth > 0) {
+      setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
+    }
+  }
+
   const positions =
     manifest && naturalSize ? resolveCharacterSpawnPositions(manifest, boardId, spawnPointsSet, lineup) : [];
 
   return (
     <div className="relative inline-block max-w-full">
       <img
+        ref={handleImgRef}
         src={boardImageUrl(boardId)}
         alt={boardId}
         title={boardId}
