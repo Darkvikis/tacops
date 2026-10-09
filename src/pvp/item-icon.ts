@@ -221,8 +221,17 @@ const ITEM_ICON_FILE: Record<string, string> = {
   "unknown": "ui_icon_item_unknown.png",
 };
 
+// character-power-items.json's own keys and the icon sprites' filenames come from two
+// independently-sourced datamine extractions, which don't always agree on casing for the same
+// item - confirmed real, not hypothetical: R_Crit_Dw02AdvancedBurstCannon (Re'vas/Crisis's relic)
+// vs. its sprite's R_Crit_DW02AdvancedBurstCannon, and R_Block_DaemonfleshPlate vs.
+// R_Block_DaemonFleshPlate. A case-insensitive index is built once and used as a fallback after an
+// exact-match miss, so this doesn't need a hardcoded exception per mismatched id and keeps working
+// if another one shows up.
+const ITEM_ICON_FILE_BY_LOWERCASE_ID = new Map(Object.entries(ITEM_ICON_FILE).map(([id, file]) => [id.toLowerCase(), file]));
+
 export function itemIconUrl(itemId: string): string | null {
-  const file = ITEM_ICON_FILE[itemId];
+  const file = ITEM_ICON_FILE[itemId] ?? ITEM_ICON_FILE_BY_LOWERCASE_ID.get(itemId.toLowerCase());
   if (!file) return null;
   return new URL(`../assets/item-icons/${file}`, import.meta.url).href;
 }

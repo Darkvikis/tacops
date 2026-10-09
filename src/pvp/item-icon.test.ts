@@ -11,6 +11,14 @@ describe("itemIconUrl", () => {
     // I_Block_* types have no icon sprite.
     expect(itemIconUrl("I_Defensive")).toBeNull();
   });
+
+  it("falls back to a case-insensitive match when the config id and sprite filename disagree on casing", () => {
+    // Real mismatch: character-power-items.json has "R_Crit_Dw02AdvancedBurstCannon" (Re'vas's
+    // relic), but the sprite file is "...DW02...". Confirmed not an isolated one-off -
+    // R_Block_DaemonfleshPlate/DaemonFleshPlate has the same casing split.
+    expect(itemIconUrl("R_Crit_Dw02AdvancedBurstCannon")).not.toBeNull();
+    expect(itemIconUrl("R_Block_DaemonfleshPlate")).not.toBeNull();
+  });
 });
 
 describe("itemFrameUrl", () => {
