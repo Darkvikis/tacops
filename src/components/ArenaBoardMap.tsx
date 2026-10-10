@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { boardImageUrl } from "../pvp/board-image";
 import { fetchSpawnPointManifest, resolveCharacterSpawnPositions, type SpawnPointManifest } from "../pvp/board-layout";
 import { characterPortraitUrl } from "../characters/character-portraits";
@@ -23,6 +23,14 @@ interface ArenaBoardMapProps {
 // the underlying spawn-point data was correct. handleImgRef checks img.complete the moment the DOM
 // node is attached and reads the size synchronously when it's already cached; onLoad still covers
 // the normal first-fetch case.
+//
+// handleImgRef MUST be wrapped in useCallback (empty deps, so its identity never changes) - a
+// plain inline function is recreated every render, and React re-invokes a *changed* ref callback
+// on every render it sees a new identity, not just on real mount/unmount. For an already-cached
+// image that's an infinite loop: ref fires -> sets state -> re-render -> new function identity ->
+// ref fires again -> sets state again -> ... (confirmed as the real cause of a white-screen
+// "Maximum update depth exceeded" crash from an earlier version of this fix that used a plain
+// inline function here).
 export function ArenaBoardMap({ boardId, spawnPointsSet, lineup }: ArenaBoardMapProps) {
   const [manifest, setManifest] = useState<SpawnPointManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -42,19 +50,11 @@ export function ArenaBoardMap({ boardId, spawnPointsSet, lineup }: ArenaBoardMap
     };
   }, []);
 
-  // boardId is stable for the lifetime of a given ArenaOpponentCard (keyed by userId in
-  // ArenaTab.tsx), but reset here too in case that ever stops being true - a stale naturalSize
-  // from a previous board would otherwise place this board's portraits using the wrong image's
-  // dimensions.
-  useEffect(() => {
-    setNaturalSize(null);
-  }, [boardId]);
-
-  function handleImgRef(img: HTMLImageElement | null) {
+  const handleImgRef = useCallback((img: HTMLImageElement | null) => {
     if (img && img.complete && img.naturalWidth > 0) {
       setNaturalSize({ width: img.naturalWidth, height: img.naturalHeight });
     }
-  }
+  }, []);
 
   const positions =
     manifest && naturalSize ? resolveCharacterSpawnPositions(manifest, boardId, spawnPointsSet, lineup) : [];
