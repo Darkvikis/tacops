@@ -221,7 +221,10 @@ export interface RawPvpEncounter {
   ratingGain: number;
   ratingLoss: number;
   boardId: string;
-  spawnPointsSet: number;
+  // Absent (not 0) when it IS 0 - confirmed via a real capture (keys were exactly
+  // ["boardId","opponent","ratingGain","ratingLoss"], no spawnPointsSet at all) - same
+  // omit-the-default convention as PlayerResources' regen fields in fetch-player-data.ts.
+  spawnPointsSet?: number;
 }
 
 export interface RawPvpState {

@@ -146,7 +146,8 @@ export function getPvpOpponentCard(encounter: RawPvpEncounter): PvpOpponentCard 
     avatarUrl: avatarUrl(opponent.avatar),
     avatarFrameUrl: avatarFrameUrl(opponent.avatarFrameId),
     boardId: encounter.boardId,
-    spawnPointsSet: encounter.spawnPointsSet,
+    // Confirmed via a real capture: absent means 0, not "unknown" - see RawPvpEncounter.
+    spawnPointsSet: encounter.spawnPointsSet ?? 0,
     lineup: opponent.units.lineup.pvp,
     units: [...characterSlots, ...mowSlot],
   };

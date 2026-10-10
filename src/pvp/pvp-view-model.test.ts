@@ -126,4 +126,10 @@ describe("getPvpOpponentCard", () => {
     expect(tigurius.rarityIconUrl).toContain("mythic");
     expect(tigurius.starIconUrls).toHaveLength(1);
   });
+
+  it("defaults spawnPointsSet to 0 when the field is absent (confirmed real API behavior: omitted when it IS 0)", () => {
+    const { spawnPointsSet, ...withoutSpawnPointsSet } = encounter;
+    const card = getPvpOpponentCard(withoutSpawnPointsSet as typeof encounter);
+    expect(card.spawnPointsSet).toBe(0);
+  });
 });
