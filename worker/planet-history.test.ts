@@ -165,32 +165,62 @@ describe("truncateAtLastReopen", () => {
     expect(truncateAtLastReopen(samples)).toEqual(samples);
   });
 
-  it("drops everything before a reopen (either side crossing <= 0 back to positive)", () => {
+  it("drops the reopen crossing itself once a decrease immediately follows it", () => {
     const samples = [
       sample(1, 900, 800),
       sample(2, 0, 400), // imperial captured
       sample(3, -50, 200), // still captured, cooldown
-      sample(4, 300, 100), // reopened - imperial back above 0
-      sample(5, 250, 50),
+      sample(4, 300, 100), // reopened (cooldown snap-back to full threshold) - not yet real progress
+      sample(5, 250, 50), // first genuine decrease - this is where the new era actually starts
     ];
-    expect(truncateAtLastReopen(samples)).toEqual([sample(4, 300, 100), sample(5, 250, 50)]);
+    expect(truncateAtLastReopen(samples)).toEqual([sample(5, 250, 50)]);
   });
 
-  it("finds the LAST reopen when there's more than one capture/reopen cycle", () => {
+  it("drops the entire dead zone between a reopen and the first real decrease - the actual bug this exists to fix", () => {
+    // Reopen snaps remaining up to full threshold (the cooldown's pointsFor/pointsAgainst reset to
+    // 0, which is what isInDominationCooldown checks), then sits flat (uncontested) and even gets
+    // bumped higher by a defender's powerup, for a long stretch, before anyone finally attacks.
+    const samples = [
+      sample(1, 900, 800),
+      sample(2, -50, 400), // captured
+      sample(3, 1000, 1000), // reopened - full threshold, nobody attacking yet
+      sample(4, 1000, 1000), // still uncontested, unchanged
+      sample(5, 1200, 1000), // a defender's powerup bumps imperial's threshold up - still nobody attacking
+      sample(6, 1200, 1000), // still flat
+      sample(7, 1150, 1000), // first real decrease - attacking has finally started
+      sample(8, 1050, 900),
+    ];
+    expect(truncateAtLastReopen(samples)).toEqual([sample(7, 1150, 1000), sample(8, 1050, 900)]);
+  });
+
+  it("falls back to the reopen crossing itself when no decrease has happened yet", () => {
+    const samples = [sample(1, 900, 800), sample(2, -50, 400), sample(3, 1000, 1000), sample(4, 1000, 1000)];
+    expect(truncateAtLastReopen(samples)).toEqual([sample(3, 1000, 1000), sample(4, 1000, 1000)]);
+  });
+
+  it("finds the LAST reopen when there's more than one capture/reopen cycle, then anchors to ITS first decrease", () => {
     const samples = [
       sample(1, 900, 800),
       sample(2, 0, 800), // capture 1
       sample(3, 300, 800), // reopen 1
-      sample(4, 300, 0), // capture 2 (devastation side this time)
-      sample(5, 300, 150), // reopen 2 - this is the one that should win
-      sample(6, 300, 100),
+      sample(4, 250, 800), // decrease after reopen 1 - irrelevant, a later reopen supersedes it
+      sample(5, 300, 0), // capture 2 (devastation side this time)
+      sample(6, 300, 150), // reopen 2 - this is the one that should win
+      sample(7, 300, 100), // first decrease after reopen 2
     ];
-    expect(truncateAtLastReopen(samples)).toEqual([sample(5, 300, 150), sample(6, 300, 100)]);
+    expect(truncateAtLastReopen(samples)).toEqual([sample(7, 300, 100)]);
   });
 
-  it("triggers on either side independently", () => {
-    const samples = [sample(1, 900, 0), sample(2, 900, 300)]; // only devastation reopens
-    expect(truncateAtLastReopen(samples)).toEqual([sample(2, 900, 300)]);
+  it("triggers reopen-detection on either side independently", () => {
+    const samples = [sample(1, 900, 0), sample(2, 900, 300), sample(3, 900, 250)]; // only devastation reopens, then decreases
+    expect(truncateAtLastReopen(samples)).toEqual([sample(3, 900, 250)]);
+  });
+
+  it("triggers decrease-detection on either side independently", () => {
+    // After reopening, imperial stays flat/increases but devastation decreases first - that alone
+    // counts as real progress resuming.
+    const samples = [sample(1, 900, 0), sample(2, 900, 300), sample(3, 950, 250)]; // imperial went UP, devastation went down
+    expect(truncateAtLastReopen(samples)).toEqual([sample(3, 950, 250)]);
   });
 });
 
@@ -310,10 +340,10 @@ describe("compressHistorySamples", () => {
     expect(result.length).toBeLessThanOrEqual(999);
   });
 
-  it("runs truncation first, so old-era samples before a reopen are dropped outright, not just compressed", () => {
+  it("runs truncation first, so old-era samples before a reopen's first real decrease are dropped outright, not just compressed", () => {
     const oldEra = Array.from({ length: 30 }, (_, i) => sample(i * FIVE_MIN_MS, 0, 100 - i));
     const reopen = sample(30 * FIVE_MIN_MS, 900, 800);
-    const current = sample(31 * FIVE_MIN_MS, 850, 780);
-    expect(compressHistorySamples([...oldEra, reopen, current])).toEqual([reopen, current]);
+    const current = sample(31 * FIVE_MIN_MS, 850, 780); // first real decrease after the reopen
+    expect(compressHistorySamples([...oldEra, reopen, current])).toEqual([current]);
   });
 });

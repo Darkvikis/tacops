@@ -105,26 +105,50 @@ export interface HistoryCacheEntry {
 
 // Belt-and-suspenders companion to isEraReset: that resets on the game's own sunk flag flipping
 // true -> false, read once per tick. This reaches the same conclusion directly from the stored
-// values themselves - the moment either side's remaining crosses from <= 0 back to positive, the
-// planet has just reopened after a capture, and everything recorded before that instant belongs to
-// the previous capture cycle, not this one. Finds the LAST such crossing (not the first - a planet
-// can be captured and reopened more than once within one still-accumulating array before this runs)
-// and drops everything strictly before it. Runs first, ahead of the three compression passes below,
-// since there's no reason to spend any compression effort on samples about to be discarded outright.
+// values themselves - the moment either side's remaining crosses from <= 0 back to positive, a
+// side has just been captured.
 //
-// Scans backward from the end, returning as soon as it finds one, rather than forward while
-// tracking the last match seen - both find the same (last) reopen, but this runs on every single
-// append, and the array it's given is always "whatever survived this same function last time, plus
-// one new sample" - so in steady state the most recent transition (if any) is right at the end,
-// and backward scanning finds it in O(1) instead of walking the whole array every time.
+// That crossing itself is NOT where the new era's meaningful history should start, though:
+// crusade-domination-view-model.ts's isInDominationCooldown treats pointsFor/pointsAgainst both
+// being 0 as cooldown, and pointsRemaining is threshold - current - so the instant a side is
+// captured, GET_CRUSADE resets its points to 0 and remaining snaps straight back up to that side's
+// full, unmet threshold (a large positive number). That same snapped-back value then sits there
+// completely unchanged through the ENTIRE cooldown, and for however much longer the planet stays
+// uncontested after reopening - so truncating at the crossing alone still leaves a dead stretch
+// (collapsed to 2 points, but weeks apart) dominating the chart's elapsed-time axis and squeezing
+// any real subsequent activity into an unreadable sliver. A genuine DECREASE (either side's
+// remaining actually going down relative to the sample before it - real attack progress, not a
+// defender's powerup pushing it up, which can happen even while fully uncontested and should stay
+// visible once the timeline has genuinely started) is what actually marks something worth
+// charting - so this truncates to the first such decrease after the last reopen, dropping the
+// reopen crossing itself along with everything in the dead stretch before that decrease. Falls
+// back to the reopen crossing if no decrease has happened yet (nothing better to anchor to).
+//
+// Finds the reopen by scanning backward from the end, rather than forward while tracking the last
+// match seen - both find the same (last) reopen, but this runs on every single append, and the
+// array it's given is always "whatever survived this same function last time, plus one new
+// sample" - so in steady state the most recent transition (if any) is right at the end, and
+// backward scanning finds it in O(1) instead of walking the whole array every time.
 export function truncateAtLastReopen(samples: readonly PlanetHistorySample[]): PlanetHistorySample[] {
+  let reopenIndex = -1;
   for (let i = samples.length - 1; i > 0; i--) {
     const prev = samples[i - 1];
     const curr = samples[i];
     const reopened = (prev.imperialRemaining <= 0 && curr.imperialRemaining > 0) || (prev.devastationRemaining <= 0 && curr.devastationRemaining > 0);
-    if (reopened) return samples.slice(i);
+    if (reopened) {
+      reopenIndex = i;
+      break;
+    }
   }
-  return [...samples];
+  if (reopenIndex === -1) return [...samples];
+
+  for (let i = reopenIndex + 1; i < samples.length; i++) {
+    const prev = samples[i - 1];
+    const curr = samples[i];
+    const decreased = curr.imperialRemaining < prev.imperialRemaining || curr.devastationRemaining < prev.devastationRemaining;
+    if (decreased) return samples.slice(i);
+  }
+  return samples.slice(reopenIndex);
 }
 
 // Lossless: collapses any maximal run of consecutive samples sharing the exact same
@@ -185,10 +209,10 @@ function isCaptureTransition(prev: PlanetHistorySample, curr: PlanetHistorySampl
 // HARD_CAP_SAMPLES samples even after truncation + lossless + lossy compression, roughly halve it -
 // but never drop a capture moment (see isCaptureTransition - these matter more than routine
 // progress points) or any of the most-recent RECENT_SAMPLES_KEPT_DENSE samples. The opposite
-// direction (<= 0 back to positive, a reopen) can't appear mid-array here at all -
-// truncateAtLastReopen already dropped everything before the last one, so a reopen is always this
-// array's own starting point, never an internal transition to preserve. This is a self-maintaining
-// bound, not a one-time cut: the array keeps growing back toward the cap and halving again
+// direction (<= 0 back to positive, a reopen) can't appear as an INTERNAL transition here at all -
+// truncateAtLastReopen already either dropped it entirely (a decrease was found after it) or left
+// it as this array's own starting point (no decrease yet), never anywhere in the middle. This is a
+// self-maintaining bound, not a one-time cut: the array keeps growing back toward the cap and halving again
 // indefinitely, so it never exceeds roughly HARD_CAP_SAMPLES in the long run regardless of how long
 // an era (or a planet that's never once gone flat) runs for.
 export function enforceHardCap(samples: readonly PlanetHistorySample[]): PlanetHistorySample[] {
