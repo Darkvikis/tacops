@@ -1,11 +1,13 @@
+mod board_assets;
 mod credentials;
 mod crusades;
 mod export;
 mod guild_chat;
 mod loki;
 
+use board_assets::fetch_spawn_points;
 use credentials::find_credentials;
-use crusades::{fetch_crusade_data, fetch_leaderboard_data};
+use crusades::{fetch_crusade_data, fetch_leaderboard_data, fetch_pvp_state};
 use export::write_text_file;
 use guild_chat::{guild_feed_init, read_channel_window, upload_replay, SessionStore};
 use loki::fetch_player_data;
@@ -26,6 +28,8 @@ pub fn run() {
             write_text_file,
             fetch_crusade_data,
             fetch_leaderboard_data,
+            fetch_pvp_state,
+            fetch_spawn_points,
             guild_feed_init,
             read_channel_window,
             upload_replay
