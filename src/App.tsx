@@ -36,7 +36,7 @@ import { seedPlanetRefreshStateFromCache } from "./api/crusade-cache-seed";
 import { countRankedParticipants, isPlanetAutoRefreshable } from "./crusade/crusade-domination-view-model";
 import { toggleStarredPlanet } from "./crusade/starred-planets";
 import { toggleTrackedPlanetId } from "./crusade/tracked-planet";
-import { appendTrackedSample, createTrackedPlanetState, mergeHistoryIntoTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
+import { appendTrackedSample, computeTotalHourlyRate, createTrackedPlanetState, mergeHistoryIntoTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
 import { fetchAllPlanetHistory, fetchPlanetHistory } from "./api/fetch-planet-history";
 import { AnonymousCrusadeSection } from "./components/AnonymousCrusadeSection";
 import { trackUsage } from "./track-usage";
@@ -834,6 +834,7 @@ export function App() {
   // render, same as the rest of this component's derived-from-state values; planetRefreshState is
   // small enough (dozens of planets) that memoizing this would be premature.
   const rankedParticipantCounts = countRankedParticipants(planetRefreshState);
+  const totalHourlyRate = computeTotalHourlyRate(crusadeData?.planets ?? [], planetHistoryByPlanet, Date.now());
 
   return (
     <main
@@ -841,7 +842,14 @@ export function App() {
       className="mx-auto flex min-h-screen w-full flex-col items-center bg-neutral-100 px-4 py-[5vh] text-center text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
     >
       <BuildTimestamp />
-      {devModeEnabled && <RankedParticipantsCounter imperial={rankedParticipantCounts.imperial} devastation={rankedParticipantCounts.devastation} />}
+      {devModeEnabled && (
+        <RankedParticipantsCounter
+          imperial={rankedParticipantCounts.imperial}
+          devastation={rankedParticipantCounts.devastation}
+          imperialRate={totalHourlyRate.imperial}
+          devastationRate={totalHourlyRate.devastation}
+        />
+      )}
       {staleVersionDetected && <StaleVersionBanner onReloadNow={() => window.location.reload()} />}
       {toastMessage && <Toast message={toastMessage} onDismiss={() => setToastMessage(null)} />}
       <h1 className="cursor-pointer text-2xl font-semibold select-none" onClick={handleTitleTap}>
