@@ -1,10 +1,11 @@
 name: Sync upstream
 
-# Daily merge of unrstuart/tacops master into this fork's master - a merge, never a rebase or
-# force-push, so the fork's own commits survive. Any merge conflict or failing build/test stops the
-# run before anything is pushed (GitHub emails the failure); resolve it by hand and push as usual.
-# Pushing to master triggers the Cloudflare auto-deploy, so pending D1 migrations are applied just
-# before the push - they're additive, so the currently deployed code keeps working with them.
+# Daily merge of unrstuart/tacops master into this fork's master. The fork only *adds* files (fork/,
+# this workflow) and never edits upstream's, so the merge can't conflict - this fork's customizations
+# are applied at build time by fork/build.mjs instead. Before pushing, the merged result is patched,
+# built and tested exactly as Cloudflare will build it, so a patch that no longer applies (or a broken
+# upstream build) fails here and never reaches the deployment. Pushing to master triggers the
+# Cloudflare build, whose deploy command applies pending D1 migrations before `wrangler deploy`.
 
 on:
   schedule:
@@ -61,21 +62,17 @@ jobs:
         if: steps.fetch.outputs.behind == 'true'
         run: npm ci
 
-      - name: build
+      - name: patch and build (as Cloudflare will)
         if: steps.fetch.outputs.behind == 'true'
-        run: npm run build
+        run: node fork/build.mjs
 
       - name: test
         if: steps.fetch.outputs.behind == 'true'
         run: npm test
 
-      - name: apply D1 migrations
-        if: steps.fetch.outputs.behind == 'true'
-        env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
-        run: npx wrangler d1 migrations apply tacops-analytics --remote
-
       - name: push
         if: steps.fetch.outputs.behind == 'true'
-        run: git push origin HEAD:master
+        run: |
+          # The patches above only touched the working tree - push the untouched merge commit.
+          git checkout -- .
+          git push origin HEAD:master

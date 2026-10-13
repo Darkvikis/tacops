@@ -38,6 +38,7 @@ import { toggleStarredPlanet } from "./crusade/starred-planets";
 import { toggleTrackedPlanetId } from "./crusade/tracked-planet";
 import { appendTrackedSample, computeTotalHourlyRate, createTrackedPlanetState, mergeHistoryIntoTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
 import { fetchAllPlanetHistory, fetchPlanetHistory } from "./api/fetch-planet-history";
+import { AnonymousCrusadeSection } from "./components/AnonymousCrusadeSection";
 import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
@@ -854,10 +855,13 @@ export function App() {
       <h1 className="cursor-pointer text-2xl font-semibold select-none" onClick={handleTitleTap}>
         TacOps
       </h1>
-      {/* This fork runs its own deployment, so the full app is the default view rather than
-          upstream's read-only AnonymousCrusadeSection - only the environment switcher stays
-          behind the "8" trigger. Kept as a bare wrapper so upstream merges stay conflict-light. */}
-      {(
+      {!devModeEnabled ? (
+        // No credentials, no login form - just a read-only crusade view sourced from the
+        // background poller's cache (see AnonymousCrusadeSection/worker/poller.ts). The full app
+        // (credential form/GO/Tabs) stays behind the same "tap the title 8 times" / press "8"
+        // trigger it always has (see toggleDevMode/handleKeyDown/handleTitleTap above).
+        <AnonymousCrusadeSection />
+      ) : (
         <>
           <p>
             {isTauri()
@@ -867,7 +871,7 @@ export function App() {
 
           {devModeEnabled && <EnvironmentToggle value={environment} onChange={setEnvironment} />}
           {devModeEnabled && isTauri() && <DataSourceToggle value={devDataSource} onChange={changeDevDataSource} />}
-          <ViewModeToggle value={viewMode} onChange={setViewMode} />
+          {devModeEnabled && <ViewModeToggle value={viewMode} onChange={setViewMode} />}
 
           {activeTab !== "guildchat" && (
             <>
@@ -917,14 +921,16 @@ export function App() {
                   >
                     GO
                   </button>
-                  <button
-                    type="button"
-                    disabled={rawPlayerData === null}
-                    onClick={exportPlayerData}
-                    className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm text-neutral-700 outline-none transition-colors hover:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:border-neutral-600 dark:text-neutral-300 dark:active:bg-neutral-900/40"
-                  >
-                    Export JSON
-                  </button>
+                  {devModeEnabled && (
+                    <button
+                      type="button"
+                      disabled={rawPlayerData === null}
+                      onClick={exportPlayerData}
+                      className="rounded-lg border border-neutral-300 bg-transparent px-3 py-2 text-sm text-neutral-700 outline-none transition-colors hover:border-blue-500 active:bg-neutral-100 disabled:cursor-default disabled:opacity-60 dark:border-neutral-600 dark:text-neutral-300 dark:active:bg-neutral-900/40"
+                    >
+                      Export JSON
+                    </button>
+                  )}
                 </div>
               </form>
               {resources && <ResourceTokens resources={resources} adViewsRemaining={adViewsRemaining} />}
@@ -936,7 +942,7 @@ export function App() {
             </>
           )}
 
-          <Tabs tabs={TABS} active={activeTab} onChange={setActiveTab} />
+          {devModeEnabled && <Tabs tabs={TABS} active={activeTab} onChange={setActiveTab} />}
 
           <div className="w-full overflow-x-auto pt-2">
             {activeTab === "operations" && (
