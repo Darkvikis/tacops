@@ -6,6 +6,8 @@ import mowData from "../assets/mow-data.json";
 import { calculateBundledUnitPowers } from "../characters/character-power";
 import { equippedRelicDamageProfiles } from "../characters/character-profile";
 import { extractSectorMap } from "../crusade/sector-map-extraction";
+import { extractPlanetDefenses } from "../crusade/planet-defenses-extraction";
+import { extractOnslaughtBoards } from "../onslaught/onslaught-extraction";
 import { computeHeroQuestJars, type HeroQuestJar } from "../hero-quests/hero-quest-view-model";
 import {
   computeGuildBossBombTimings,
@@ -17,7 +19,7 @@ import {
   computeTreasureBeachTimings,
   computeWavesTimings,
 } from "./resource-regen";
-import type { Credentials, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlayerResources, RawUnit } from "./types";
+import type { Credentials, CrusadeSectorMap, Environment, ExpeditionBoardEntry, OnslaughtBoards, PlanetDefenseCounts, PlayerResources, RawUnit } from "./types";
 
 const characterIds = new Set((characterData as { id: string }[]).map((c) => c.id));
 const mowIds = new Set((mowData as { mows: { snowprintId: string }[] }).mows.map((m) => m.snowprintId));
@@ -34,6 +36,8 @@ export interface PlayerData {
   resources: PlayerResources;
   heroQuestJars: HeroQuestJar[];
   sectorMap: CrusadeSectorMap;
+  planetDefenses: Record<string, PlanetDefenseCounts>;
+  onslaughtBoards: OnslaughtBoards;
   // The untouched GET_PLAYER envelope, kept around only so it can be exported as-is.
   raw: unknown;
 }
@@ -119,6 +123,21 @@ export async function fetchPlayerData(
       ? survivalStaminaModule.staminaConfig.staminaRegenerationTime * 1000
       : undefined,
   );
+  // The Legendary Event's liveEventConfigId (e.g. "legendary_hero_event_14") increments per
+  // iteration like the LHE's/seasonal event's do, so it's matched by module type instead. Its
+  // stamina/config live in a separate staminaEventModule sibling of the "legendaryHeroEvent"
+  // module within the same live event - identical shape/mechanism to Survival's own
+  // staminaEventModule, hence reusing computeSurvivalTimings rather than a near-duplicate function.
+  const legendaryEventStaminaModule = hero?.liveEvents?.liveEvents
+    ?.find((e: any) => e?.modules?.some((m: any) => m.type === "legendaryHeroEvent"))
+    ?.modules?.find((m: any) => m.type === "staminaEventModule")?.module;
+  const legendaryEventTimings = computeSurvivalTimings(
+    legendaryEventStaminaModule?.stamina,
+    legendaryEventStaminaModule?.staminaConfig?.maxStamina,
+    legendaryEventStaminaModule?.staminaConfig?.staminaRegenerationTime !== undefined
+      ? legendaryEventStaminaModule.staminaConfig.staminaRegenerationTime * 1000
+      : undefined,
+  );
 
   // "currentAmount" is omitted entirely (rather than sent as 0) when a regenerating resource is
   // actually at 0, so every one of these needs a fallback rather than trusting the field's presence.
@@ -141,6 +160,7 @@ export async function fetchPlayerData(
     pvpCapAt: pvpTimings.capAt,
     pvpPausesAt: pvpTimings.pausesAt,
     pvpStopped: pvpTimings.stopped,
+    pvpBurnAt: pvpTimings.burnAt,
     guildBoss: hero?.progress?.guildState?.guildBoss?.attempts?.currentAmount ?? 0,
     guildBossNextTokenAt: guildBossTimings.nextTokenAt,
     guildBossCapAt: guildBossTimings.capAt,
@@ -157,9 +177,15 @@ export async function fetchPlayerData(
     survivalNextTokenAt: survivalTimings.nextTokenAt,
     survivalCapAt: survivalTimings.capAt,
     survivalActive: survivalStaminaModule !== undefined,
+    legendaryEvent: legendaryEventStaminaModule?.stamina?.currentAmount ?? 0,
+    legendaryEventNextTokenAt: legendaryEventTimings.nextTokenAt,
+    legendaryEventCapAt: legendaryEventTimings.capAt,
+    legendaryEventActive: legendaryEventStaminaModule !== undefined,
   };
 
   const sectorMap = extractSectorMap(hero);
+  const planetDefenses = extractPlanetDefenses(hero);
+  const onslaughtBoards = extractOnslaughtBoards(hero);
 
   return {
     board,
@@ -171,6 +197,8 @@ export async function fetchPlayerData(
     resources,
     heroQuestJars: computeHeroQuestJars(hero?.loot?.urnOfBalls),
     sectorMap,
+    planetDefenses,
+    onslaughtBoards,
     raw: response,
   };
 }

@@ -1,5 +1,14 @@
-import type { ReactNode } from "react";
-import { computeTrackerGraphData, type GraphPoint, type LabeledPoint, type SideAxis, type TimeTick, type TrackedPlanetState } from "../crusade/planet-tracker-view-model";
+import { useRef, useState, type ReactNode } from "react";
+import {
+  computeTrackerGraphData,
+  formatElapsedSeconds,
+  type GraphPoint,
+  type GraphTimeWindow,
+  type LabeledPoint,
+  type SideAxis,
+  type TimeTick,
+  type TrackedPlanetState,
+} from "../crusade/planet-tracker-view-model";
 
 // Same side colors as the sector map modal's NODE_COLOR (not shared/exported anywhere in this
 // codebase - every hand-rolled SVG component defines its own local copy).
@@ -64,16 +73,101 @@ interface AxisSpec {
 
 interface LineSpec {
   points: GraphPoint[];
+  // Raw remaining-value per sample, parallel to `points` - only needed for the hover tooltip
+  // (everything else about rendering a line only needs its normalized points).
+  values: number[];
   label: LabeledPoint | null;
   color: string;
+}
+
+// Hovering shows a vertical rule snapped to the nearest actual sample (not a continuously
+// interpolated position) - that's what guarantees the dot the tooltip draws sits exactly on the
+// line/vertical-rule intersection, rather than slightly off it between two real data points.
+// Clicking does nothing - this is pure hover, no onClick handler exists to suppress.
+const TOOLTIP_WIDTH = 132;
+const TOOLTIP_LINE_HEIGHT = 15;
+const TOOLTIP_PADDING = 6;
+
+function HoverOverlay({ lines, times, index }: { lines: LineSpec[]; times: number[]; index: number }) {
+  const first = lines[0]?.points[index];
+  if (!first) return null;
+  const x = toSvgX(first.x);
+  // Flip the tooltip to the line's left once the cursor is past the plot's midpoint, so it never
+  // runs off the right edge of the chart (and symmetrically never off the left).
+  const anchorLeft = x > (PLOT_LEFT + PLOT_RIGHT) / 2;
+  const boxX = anchorLeft ? x - TOOLTIP_WIDTH - 8 : x + 8;
+  const boxY = MARGIN_TOP + 4;
+  // One extra line up top for the sample's elapsed time, above each side's value.
+  const boxHeight = TOOLTIP_PADDING * 2 + (lines.length + 1) * TOOLTIP_LINE_HEIGHT;
+  const elapsedSeconds = times[index];
+
+  return (
+    <g pointerEvents="none">
+      <line x1={x} y1={MARGIN_TOP} x2={x} y2={PLOT_BOTTOM} stroke="currentColor" strokeOpacity={0.5} strokeWidth={1} strokeDasharray="3 3" />
+      {lines.map((line, i) => {
+        const p = line.points[index];
+        return p ? <circle key={i} cx={x} cy={toSvgY(p.y)} r={3.5} fill={line.color} stroke="white" strokeWidth={1.2} /> : null;
+      })}
+      <rect x={boxX} y={boxY} width={TOOLTIP_WIDTH} height={boxHeight} rx={4} fill="rgba(23,23,23,0.85)" />
+      {elapsedSeconds != null && (
+        <text x={boxX + TOOLTIP_PADDING} y={boxY + TOOLTIP_PADDING + TOOLTIP_LINE_HEIGHT - 4} fontSize={12} fontWeight="bold" fill="white" opacity={0.85}>
+          {formatElapsedSeconds(elapsedSeconds)}
+        </text>
+      )}
+      {lines.map((line, i) => {
+        const value = line.values[index];
+        if (value == null) return null;
+        return (
+          <text key={i} x={boxX + TOOLTIP_PADDING} y={boxY + TOOLTIP_PADDING + (i + 2) * TOOLTIP_LINE_HEIGHT - 4} fontSize={12} fontWeight="bold" fill={line.color}>
+            {value.toLocaleString()}
+          </text>
+        );
+      })}
+    </g>
+  );
 }
 
 // The shared rendering core for all three graphs - a solo graph passes one AxisSpec/LineSpec, the
 // Combined graph passes two (both AxisSpecs pointing at the very same SideAxis, one per side, so
 // the same numbers are drawn once at the left edge and once at the right).
-function SingleGraph({ axes, lines, timeTicks }: { axes: AxisSpec[]; lines: LineSpec[]; timeTicks: TimeTick[] }) {
+function SingleGraph({ axes, lines, timeTicks, times }: { axes: AxisSpec[]; lines: LineSpec[]; timeTicks: TimeTick[]; times: number[] }) {
+  const svgRef = useRef<SVGSVGElement>(null);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const referencePoints = lines[0]?.points;
+
+  function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    if (!referencePoints || referencePoints.length === 0) return;
+    const rect = svgRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    // 1 viewBox unit = 1 real pixel throughout this component (see the fixed-size comment above),
+    // so the client offset maps directly to viewBox coordinates with no scale correction needed.
+    const localX = e.clientX - rect.left;
+    const normalizedX = Math.min(1, Math.max(0, (localX - PLOT_LEFT) / PLOT_WIDTH));
+    let nearest = 0;
+    let nearestDistance = Infinity;
+    for (let i = 0; i < referencePoints.length; i++) {
+      const distance = Math.abs(referencePoints[i].x - normalizedX);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearest = i;
+      }
+    }
+    setHoverIndex(nearest);
+  }
+
   return (
-    <svg viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`} width={VIEWBOX_WIDTH} height={VIEWBOX_HEIGHT}>
+    <svg
+      ref={svgRef}
+      viewBox={`0 0 ${VIEWBOX_WIDTH} ${VIEWBOX_HEIGHT}`}
+      width={VIEWBOX_WIDTH}
+      height={VIEWBOX_HEIGHT}
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => setHoverIndex(null)}
+      // Stops a card-level onClick (see GraphCard/MonitorTab) from firing when the click actually
+      // lands on the graph itself - that's reserved for hover (handleMouseMove above), not a click
+      // action, so a click here should do nothing rather than also triggering the card's.
+      onClick={(e) => e.stopPropagation()}
+    >
       {axes.map(({ axis, side, color }) =>
         axis.ticks.map((tick) => {
           const y = toSvgY(tick.normalizedY);
@@ -117,13 +211,30 @@ function SingleGraph({ axes, lines, timeTicks }: { axes: AxisSpec[]; lines: Line
         const above = lines.every((other, j) => j === i || !other.label || thisY <= toSvgY(other.label.y));
         return <LabelCallout key={i} x={toSvgX(label.x)} y={thisY} value={label.value} color={color} above={above} />;
       })}
+      {hoverIndex !== null && <HoverOverlay lines={lines} times={times} index={hoverIndex} />}
     </svg>
   );
 }
 
-function GraphCard({ title, caption, children }: { title: string; caption: string; children: ReactNode }) {
+function GraphCard({
+  title,
+  caption,
+  children,
+  onClick,
+}: {
+  title: string;
+  caption: string;
+  children: ReactNode;
+  // Fired for a click anywhere on the card except the graph itself (SingleGraph's own <svg> stops
+  // propagation - see above) - used by MonitorTab to open the sector map for this planet without
+  // fighting the graph's own hover handling.
+  onClick?: () => void;
+}) {
   return (
-    <div className="w-fit rounded-lg border border-black/10 bg-white/60 p-3 dark:border-white/15 dark:bg-white/5">
+    <div
+      className={`w-fit rounded-lg border border-black/10 bg-white/60 p-3 dark:border-white/15 dark:bg-white/5 ${onClick ? "cursor-pointer" : ""}`}
+      onClick={onClick}
+    >
       <div className="mb-1 flex items-center justify-between gap-2">
         <h3 className="font-medium">{title}</h3>
         <span className="text-xs opacity-70">{caption}</span>
@@ -134,48 +245,79 @@ function GraphCard({ title, caption, children }: { title: string; caption: strin
 }
 
 interface PlanetTrackerGraphProps {
+  // Always the full, untrimmed sample history - windowing for display is this component's own job
+  // (see hoursFilter below), not the caller's, so startedAtMs/frozen (derived from the FULL
+  // history by createTrackedPlanetState/mergeHistoryIntoTrackedPlanetState/trackedStateFromHistory)
+  // stay correct regardless of what the user currently has the graph zoomed to.
   state: TrackedPlanetState;
   planetName: string;
-  // Drives only the "elapsed" caption while live - the line/point positions come entirely from the
-  // samples themselves (see computeTrackerGraphData), so a stale nowMs never misdraws the lines, it
-  // just freezes the caption along with everything else once the parent stops re-passing it.
+  // Drives the "elapsed" caption while live, and (together with hoursFilter) the graph's time
+  // window - the line/point positions still come entirely from the samples themselves (see
+  // computeTrackerGraphData), so a stale nowMs never misdraws the lines, it just freezes the
+  // caption/window along with everything else once the parent stops re-passing it.
   nowMs: number;
+  // May be Infinity (the default - show the natural, sample-derived full range). When finite,
+  // clamps the x-axis to exactly [nowMs - hoursFilter hours, nowMs], regardless of where the
+  // actual samples land within it - see computeTrackerGraphData's own comment on why this can't
+  // just be "trim the samples array and let the axis follow."
+  hoursFilter?: number;
+  // Renders only the Combined (both sides on one shared scale) graph, omitting the Imperial/
+  // Devastation solo ones - used by the Monitor tab, which shows every planet at once and has no
+  // room (or need) for three graphs apiece. Also drops the "- Combined" title suffix, since there's
+  // nothing left to disambiguate it from.
+  onlyCombined?: boolean;
+  // Fired for a click anywhere on the (only, since this is onlyCombined-only) card except the
+  // graph itself - see GraphCard's own comment. Used by MonitorTab to open the sector map.
+  onCardClick?: () => void;
 }
 
-export function PlanetTrackerGraph({ state, planetName, nowMs }: PlanetTrackerGraphProps) {
-  const data = computeTrackerGraphData(state);
+export function PlanetTrackerGraph({ state, planetName, nowMs, hoursFilter = Infinity, onlyCombined = false, onCardClick }: PlanetTrackerGraphProps) {
+  const graphWindow: GraphTimeWindow | undefined = Number.isFinite(hoursFilter) ? { startMs: nowMs - hoursFilter * 60 * 60 * 1000, endMs: nowMs } : undefined;
+  const data = computeTrackerGraphData(state, graphWindow);
   const elapsedSeconds = Math.max(0, Math.round(((state.frozen ? state.samples[state.samples.length - 1]?.atMs ?? nowMs : nowMs) - state.startedAtMs) / 1000));
-  const caption = state.frozen ? `Captured at ${elapsedSeconds}s` : `${elapsedSeconds}s elapsed`;
+  const elapsedLabel = formatElapsedSeconds(elapsedSeconds);
+  const caption = state.frozen ? `Captured at ${elapsedLabel}` : `${elapsedLabel} elapsed`;
+
+  const combinedGraph = (
+    <GraphCard title={onlyCombined ? planetName : `${planetName} - Combined`} caption={caption} onClick={onlyCombined ? onCardClick : undefined}>
+      <SingleGraph
+        axes={[
+          { axis: data.combined.axis, side: "left", color: IMPERIAL_COLOR },
+          { axis: data.combined.axis, side: "right", color: DEVASTATION_COLOR },
+        ]}
+        lines={[
+          { points: data.combined.imperial.points, values: data.combined.imperial.values, label: data.combined.imperial.label, color: IMPERIAL_COLOR },
+          { points: data.combined.devastation.points, values: data.combined.devastation.values, label: data.combined.devastation.label, color: DEVASTATION_COLOR },
+        ]}
+        timeTicks={data.timeTicks}
+        times={data.sampleElapsedSeconds}
+      />
+    </GraphCard>
+  );
+
+  if (onlyCombined) {
+    return <div className="mt-4 flex flex-wrap gap-4">{combinedGraph}</div>;
+  }
 
   return (
     <div className="mt-4 flex flex-wrap gap-4">
       <GraphCard title={`${planetName} - Imperial`} caption={caption}>
         <SingleGraph
           axes={[{ axis: data.imperial.axis, side: "left", color: IMPERIAL_COLOR }]}
-          lines={[{ points: data.imperial.line.points, label: data.imperial.line.label, color: IMPERIAL_COLOR }]}
+          lines={[{ points: data.imperial.line.points, values: data.imperial.line.values, label: data.imperial.line.label, color: IMPERIAL_COLOR }]}
           timeTicks={data.timeTicks}
+          times={data.sampleElapsedSeconds}
         />
       </GraphCard>
       <GraphCard title={`${planetName} - Devastation`} caption={caption}>
         <SingleGraph
           axes={[{ axis: data.devastation.axis, side: "left", color: DEVASTATION_COLOR }]}
-          lines={[{ points: data.devastation.line.points, label: data.devastation.line.label, color: DEVASTATION_COLOR }]}
+          lines={[{ points: data.devastation.line.points, values: data.devastation.line.values, label: data.devastation.line.label, color: DEVASTATION_COLOR }]}
           timeTicks={data.timeTicks}
+          times={data.sampleElapsedSeconds}
         />
       </GraphCard>
-      <GraphCard title={`${planetName} - Combined`} caption={caption}>
-        <SingleGraph
-          axes={[
-            { axis: data.combined.axis, side: "left", color: IMPERIAL_COLOR },
-            { axis: data.combined.axis, side: "right", color: DEVASTATION_COLOR },
-          ]}
-          lines={[
-            { points: data.combined.imperial.points, label: data.combined.imperial.label, color: IMPERIAL_COLOR },
-            { points: data.combined.devastation.points, label: data.combined.devastation.label, color: DEVASTATION_COLOR },
-          ]}
-          timeTicks={data.timeTicks}
-        />
-      </GraphCard>
+      {combinedGraph}
     </div>
   );
 }

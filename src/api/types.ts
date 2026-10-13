@@ -87,6 +87,26 @@ export interface CrusadeSectorMap {
   connections: CrusadeConnection[];
 }
 
+export interface PlanetDefenseCounts {
+  imperial: number;
+  devastation: number;
+}
+
+export type OnslaughtAlliance = "Imperial" | "Chaos" | "Xenos";
+
+export interface OnslaughtTierBoard {
+  // Matches the Rank enum's numeric values directly (1-21) - confirmed against a real capture,
+  // including the collapsed "X3 challenge" entries (tier 3/6/9/12 = Stone3/Iron3/Bronze3/Silver3).
+  tier: number;
+  boardId: string;
+  // True once this rank's "1"/"2" sub-tiers have collapsed away and only the repeatable "3"
+  // challenge battle remains (see onslaught-extraction.ts) - drives which rank icon variant
+  // (plain numeral vs. the "4"/challenge skull) the UI shows for this entry.
+  isChallenge: boolean;
+}
+
+export type OnslaughtBoards = Record<OnslaughtAlliance, OnslaughtTierBoard[]>;
+
 export interface CrusadeData {
   crusadeId: string;
   seasonNumber: number;
@@ -155,6 +175,13 @@ export interface PlanetLeaderboard {
   // _against query actually comes back with a myRank - null if neither does.
   side: SideLeaderboardResult | null;
   faction: FactionLeaderboardResult | null;
+  // Both sides' raw side-leaderboard participant counts, kept independently unlike `side` above
+  // (which collapses to whichever side is mine) - not personal data, just an aggregate headcount,
+  // so unlike myRank/myPoints it's safe to show on the anonymous view too. Lets a global "ranked
+  // Imperial vs Devastation participants" count be summed across every planet's leaderboard. null
+  // when that side's leaderboard didn't come back at all for this planet.
+  forParticipants: number | null;
+  againstParticipants: number | null;
 }
 
 // Per-planet leaderboard fetch/refresh state, owned in App.tsx and threaded down through the
@@ -168,6 +195,61 @@ export interface PlanetRefreshEntry {
   lastAttemptAt: number | null;
   lastAttemptFailed: boolean;
   isLoading: boolean;
+}
+
+// GET_PVP_STATE's per-encounter opponent preview - see pvp/pvp-view-model.ts for how this gets
+// turned into display data. Field names here match the raw wire shape (camelCase as sent), not
+// this repo's usual naming - keep it that way so a diff against a fresh capture stays obvious.
+export interface RawPvpItemInstance {
+  itemId: string;
+  level: number;
+}
+
+export interface RawPvpUnit {
+  progressionIndex?: number;
+  xpLevel?: number;
+  // Absent on Machine of War units - they have no rank.
+  rank?: number;
+  active?: number;
+  passive?: number;
+  upgrades?: number[];
+  // Absent on Machine of War units - they have no equipment slots.
+  items?: Record<string, string>; // SlotN -> itemInstanceId
+  starLevel?: number;
+}
+
+export interface RawPvpOpponent {
+  userId: string;
+  displayName: string;
+  avatar: string;
+  avatarFrameId?: string;
+  rating: number;
+  level: number;
+  position: number;
+  units: {
+    units: Record<string, RawPvpUnit>;
+    lineup: { pvp: string[] };
+    mowLineup: { pvp: string };
+  };
+  items: {
+    items: Record<string, RawPvpItemInstance>;
+  };
+}
+
+export interface RawPvpEncounter {
+  opponent: RawPvpOpponent;
+  ratingGain: number;
+  ratingLoss: number;
+  boardId: string;
+  // Absent (not 0) when it IS 0 - confirmed via a real capture (keys were exactly
+  // ["boardId","opponent","ratingGain","ratingLoss"], no spawnPointsSet at all) - same
+  // omit-the-default convention as PlayerResources' regen fields in fetch-player-data.ts.
+  spawnPointsSet?: number;
+}
+
+export interface RawPvpState {
+  playerPosition: number | null;
+  pvpEncounters: RawPvpEncounter[];
 }
 
 export interface PlayerResources {
@@ -187,6 +269,7 @@ export interface PlayerResources {
   pvpCapAt: number | null;
   pvpPausesAt: number | null;
   pvpStopped: boolean;
+  pvpBurnAt: number | null;
   guildBoss: number; // "raid tokens" - has special burn-at-cap logic, see guildBossBurnAt
   guildBossNextTokenAt: number | null;
   guildBossCapAt: number | null;
@@ -207,4 +290,10 @@ export interface PlayerResources {
   // False when no seasonal event is currently live - ResourceTokens omits the tile entirely in
   // this case (unlike heroQuestActive, which grays the tile out instead).
   survivalActive: boolean;
+  legendaryEvent: number;
+  legendaryEventNextTokenAt: number | null;
+  legendaryEventCapAt: number | null;
+  // False when no Legendary Event is currently live - ResourceTokens omits the tile entirely in
+  // this case, same as survivalActive.
+  legendaryEventActive: boolean;
 }

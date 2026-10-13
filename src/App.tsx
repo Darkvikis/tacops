@@ -3,6 +3,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { Spinner } from "./components/Spinner";
 import { ErrorIcon } from "./components/ErrorIcon";
 import { EnvironmentToggle } from "./components/EnvironmentToggle";
+import { DataSourceToggle } from "./components/DataSourceToggle";
 import { ViewModeToggle, type ViewMode } from "./components/ViewModeToggle";
 import { Tabs } from "./components/Tabs";
 import { OperationsTable } from "./components/OperationsTable";
@@ -10,37 +11,48 @@ import { OperationsCards } from "./components/OperationsCards";
 import { CharactersTable } from "./components/CharactersTable";
 import { MowTable } from "./components/MowTable";
 import { GuildChatTab } from "./components/GuildChatTab";
+import { ArenaTab } from "./components/ArenaTab";
+import { OnslaughtTab } from "./components/OnslaughtTab";
 import { BoardCoverageTab } from "./components/BoardCoverageTab";
 import { CrusadeTab } from "./components/CrusadeTab";
+import { MonitorTab } from "./components/MonitorTab";
 import { HeroQuestsTab } from "./components/HeroQuestsTab";
 import { RewardPriorityPicker } from "./components/RewardPriorityPicker";
 import { RequiredCharacterPool } from "./components/RequiredCharacterPool";
 import { ResourceTokens } from "./components/ResourceTokens";
 import { BuildTimestamp } from "./components/BuildTimestamp";
+import { RankedParticipantsCounter } from "./components/RankedParticipantsCounter";
+import { StaleVersionBanner } from "./components/StaleVersionBanner";
 import { Toast } from "./components/Toast";
+import { registerStaleVersionHandler, startVersionCheck } from "./version-check";
 import { fetchPlayerData } from "./api/fetch-player-data";
 import { entryIsUnavailable } from "./board/board-view-model";
 import { activePlanetIds, fetchCrusadeData, fetchPlanetLeaderboard, resolveMyFactionId } from "./api/fetch-crusade-data";
 import { storeWebCredential } from "./api/store-web-credential";
 import { fetchUserPreferences, setAntiFavoritedCharacters, setFavoritedCharacters, setFavoritedPlanets } from "./api/user-preferences";
+import { getDevDataSource, setDevDataSource, type DevDataSource } from "./api/dev-data-source";
 import { fetchCrusadeCache } from "./api/fetch-crusade-cache";
 import { seedPlanetRefreshStateFromCache } from "./api/crusade-cache-seed";
-import { isPlanetAutoRefreshable } from "./crusade/crusade-domination-view-model";
+import { countRankedParticipants, isPlanetAutoRefreshable } from "./crusade/crusade-domination-view-model";
 import { toggleStarredPlanet } from "./crusade/starred-planets";
 import { toggleTrackedPlanetId } from "./crusade/tracked-planet";
-import { appendTrackedSample, createTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
+import { appendTrackedSample, computeTotalHourlyRate, createTrackedPlanetState, mergeHistoryIntoTrackedPlanetState, restartIfRecontested } from "./crusade/planet-tracker-view-model";
+import { fetchAllPlanetHistory, fetchPlanetHistory } from "./api/fetch-planet-history";
 import { trackUsage } from "./track-usage";
 import type { BoardAssignmentResult } from "./board/board-solver";
 import type { SolveRequest, SolveResponse } from "./board/board-solver.worker";
 import type { PriorityKey } from "./board/reward-amount";
-import type { CrusadeData, CrusadeSectorMap, Environment, ExpeditionBoardEntry, PlanetLeaderboard, PlanetRefreshEntry, PlayerResources, RawUnit } from "./api/types";
+import type { CrusadeData, CrusadeSectorMap, Environment, ExpeditionBoardEntry, OnslaughtBoards, PlanetDefenseCounts, PlanetLeaderboard, PlanetRefreshEntry, PlayerResources, RawUnit } from "./api/types";
 import type { HeroQuestJar } from "./hero-quests/hero-quest-view-model";
-import type { TrackedPlanetState } from "./crusade/planet-tracker-view-model";
+import type { TrackedPlanetSample, TrackedPlanetState } from "./crusade/planet-tracker-view-model";
 
 const TABS = [
   { id: "operations", label: "Operations" },
   { id: "crusade", label: "Crusade" },
+  { id: "monitor", label: "Monitor" },
   { id: "guildchat", label: "Guild Chat" },
+  { id: "arena", label: "Arena" },
+  { id: "onslaught", label: "Onslaught" },
   { id: "characters", label: "Characters" },
   { id: "mows", label: "Machines of War" },
   { id: "coverage", label: "Board Coverage" },
@@ -52,6 +64,13 @@ const SOLVER_COUNTDOWN_SECONDS = 70; // 7 lexicographic passes x the 10s-per-pas
 
 export function App() {
   const [environment, setEnvironment] = useState<Environment>("prod");
+  // Tauri-only (see dev-data-source.ts) - initialized from localStorage so the choice survives
+  // app restarts; meaningless/always "local" on the web build.
+  const [devDataSource, setDevDataSourceState] = useState<DevDataSource>(() => getDevDataSource());
+  function changeDevDataSource(source: DevDataSource) {
+    setDevDataSource(source);
+    setDevDataSourceState(source);
+  }
   const [activeTab, setActiveTab] = useState(TABS[0].id);
   const [viewMode, setViewMode] = useState<ViewMode>("cards");
   const [selectedExpeditionId, setSelectedExpeditionId] = useState<string | null>(null);
@@ -71,11 +90,14 @@ export function App() {
   const [antiFavoritedCharacterIds, setAntiFavoritedCharacterIds] = useState<Set<string>>(new Set());
   const [favoritedPlanetIds, setFavoritedPlanetIds] = useState<Set<string>>(new Set());
   const [toastMessage, setToastMessage] = useState<string | null>(null);
+  const [staleVersionDetected, setStaleVersionDetected] = useState(false);
   const [machinesOfWar, setMachinesOfWar] = useState<RawUnit[]>([]);
   const [adViewsRemaining, setAdViewsRemaining] = useState<number | null>(null);
   const [resources, setResources] = useState<PlayerResources | null>(null);
   const [heroQuestJars, setHeroQuestJars] = useState<HeroQuestJar[]>([]);
   const [sectorMap, setSectorMap] = useState<CrusadeSectorMap>({ planets: [], connections: [] });
+  const [planetDefenses, setPlanetDefenses] = useState<Record<string, PlanetDefenseCounts>>({});
+  const [onslaughtBoards, setOnslaughtBoards] = useState<OnslaughtBoards>({ Imperial: [], Chaos: [], Xenos: [] });
   const [rawPlayerData, setRawPlayerData] = useState<unknown>(null);
   const [crusadeData, setCrusadeData] = useState<CrusadeData | null>(null);
   // Mirrors crusadeData for the dedicated tracker loop below (see the tracker effect) - that loop
@@ -112,6 +134,13 @@ export function App() {
   // (which would tear down/rebuild the loop on every single sample).
   const trackedPlanetStateRef = useRef<TrackedPlanetState | null>(null);
   trackedPlanetStateRef.current = trackedPlanetState;
+  // Every planet's persisted history, for the Monitor tab (MonitorTab.tsx) - fetched and kept
+  // fresh here, not inside MonitorTab itself, so it survives switching away from the Monitor tab
+  // and back (MonitorTab is only ever mounted while its tab is active, so state owned inside it
+  // would reset to empty and have to re-fetch from scratch on every tab switch). Shared,
+  // account-agnostic data (the same open /api/planet-history-all endpoint everyone reads), so this
+  // starts and keeps refreshing independent of go()/crusadeSessionId/activeTab.
+  const [planetHistoryByPlanet, setPlanetHistoryByPlanet] = useState<Map<string, TrackedPlanetSample[]>>(new Map());
   // Bumped on every scheduler effect setup/teardown so a stale in-flight fetch from a torn-down
   // session (a previous GO, unmount, or React StrictMode's dev-mode double-invoke) can never
   // commit into a newer session's state.
@@ -151,6 +180,38 @@ export function App() {
   useEffect(() => {
     return () => workerRef.current?.terminate();
   }, []);
+
+  // Forces a stale tab to reload once a newer build has deployed (see src/version-check.ts) -
+  // specifically so an old tab's client logic (e.g. a tracker loop predating some future rate
+  // limit) can't keep running indefinitely against our Worker. Tauri's own desktop build has no
+  // "reload the page" concept and ships through GitHub Releases, not this web deploy, so it's
+  // exempt entirely. A 1-minute interval is deliberately tight - re-fetching "/" never reaches the
+  // Worker at all (served straight from Cloudflare's static asset cache, see version-check.ts's own
+  // comment), so polling this often costs nothing, and it bounds how long a stale tab can keep
+  // hammering the Worker with old behavior after a new deploy to about a minute.
+  useEffect(() => {
+    if (isTauri()) return;
+    const VERSION_CHECK_INTERVAL_MS = 3600 * 1000;
+    return startVersionCheck(() => setStaleVersionDetected(true), VERSION_CHECK_INTERVAL_MS);
+  }, []);
+
+  // The other half of staleness detection: the server itself rejects any /api/fetch-* call from a
+  // too-old client with HTTP 426 (worker/client-version.ts), before doing any work - this is what
+  // protects a tab that's already open right now, running JS from before any of this version
+  // machinery existed. src/api/fetch-with-timeout.ts calls reportStaleVersion() the moment that
+  // happens; this just wires it to the same banner as the polling check above. Harmless to
+  // register in Tauri too (it never goes through fetchWithTimeout, so this simply never fires).
+  useEffect(() => {
+    registerStaleVersionHandler(() => setStaleVersionDetected(true));
+  }, []);
+
+  // A few seconds' grace after the banner appears (see StaleVersionBanner) before forcing the
+  // reload, purely so it's visible at all rather than the page vanishing with no explanation.
+  useEffect(() => {
+    if (!staleVersionDetected) return;
+    const timer = setTimeout(() => window.location.reload(), 3000);
+    return () => clearTimeout(timer);
+  }, [staleVersionDetected]);
 
   // The solver runs entirely in a Web Worker (javascript-lp-solver is synchronous with no
   // async/worker mode of its own) so it can never block the main thread - the board renders
@@ -320,6 +381,8 @@ export function App() {
       setResources(data.resources);
       setHeroQuestJars(data.heroQuestJars);
       setSectorMap(data.sectorMap);
+      setPlanetDefenses(data.planetDefenses);
+      setOnslaughtBoards(data.onslaughtBoards);
       setRawPlayerData(data.raw);
       setFetchState("success");
       if (!isTauri()) {
@@ -478,6 +541,15 @@ export function App() {
   const CRUSADE_SCORE_ACTIVE_REFRESH_MS = 60 * 1000;
   const CRUSADE_SCORE_AWAY_REFRESH_MS = 5 * 60 * 1000;
 
+  // The tracker loop's web-only rate cap (see the tracker effect below) - web calls go through our
+  // own Worker (fetchWithTimeout -> /api/fetch-crusade-data/-leaderboard-data), so a web user
+  // tracking a planet directly costs us Workers resources; the Tauri desktop app's equivalent
+  // calls go straight from the user's own machine to Tacticus's servers (invokeWithTimeout's Rust
+  // commands), costing us nothing, so it keeps the original no-delay behavior. Measured on a real
+  // request pair: a *request-start-to-request-start* interval, not response-to-next-request - a
+  // slow round trip eats into the gap rather than stacking on top of it.
+  const TRACKER_WEB_MIN_INTERVAL_MS = 10_000;
+
   // Claims the most-overdue eligible planet (not currently loading, auto-refreshable - starred,
   // ranked, or not yet successfully loaded, see isPlanetAutoRefreshable - and past its cadence
   // threshold) by marking it isLoading synchronously - contains no `await`, so with up to 4 workers calling
@@ -558,9 +630,11 @@ export function App() {
 
   // Dedicated, single-instance loop for whichever planet is tracked (see toggleTrackedPlanet) -
   // separate from the worker pool above (which explicitly skips it, see claimEligiblePlanet) so it
-  // can refresh continuously with no delay between iterations, exactly like refreshPlanetNow fires
-  // both a leaderboard fetch and a crusade-score refresh together. Restarts whenever the tracked
-  // planet changes or a new go() starts a new session.
+  // can refresh on its own cadence, exactly like refreshPlanetNow fires both a leaderboard fetch
+  // and a crusade-score refresh together. True no-delay only in Tauri (see
+  // TRACKER_WEB_MIN_INTERVAL_MS's own comment, above) - the desktop app's calls never reach our
+  // Worker at all, so there's no backend cost to racing them. Restarts whenever the tracked planet
+  // changes or a new go() starts a new session.
   useEffect(() => {
     if (!trackedPlanetId) return;
     // Re-bound with an explicit type annotation (rather than relying on the flow-narrowing above)
@@ -580,7 +654,15 @@ export function App() {
         });
         if (cancelled) return;
         if (!trackedPlanetStateRef.current?.frozen) {
+          const requestStartedAt = Date.now();
           await Promise.all([fetchOnePlanet(planetId), refreshCrusadeScores()]);
+          // Request-start-to-request-start spacing, not response-to-next-request: a slow round
+          // trip eats into the 10s gap instead of stacking on top of it, and a round trip that
+          // already took >=10s loops again immediately rather than waiting negative time.
+          if (!isTauri()) {
+            const remaining = TRACKER_WEB_MIN_INTERVAL_MS - (Date.now() - requestStartedAt);
+            if (remaining > 0) await new Promise((resolve) => setTimeout(resolve, remaining));
+          }
         } else {
           // Frozen (captured/in cooldown) - don't add extra fetch load for what can be a
           // multi-hour cooldown window. Just re-check the frozen flag periodically so recontest
@@ -599,14 +681,34 @@ export function App() {
 
   // Tracks how long the user has been away from the Crusades tab - reset to null the instant
   // they return (snapping the auto-refresh cadence back to 5 minutes immediately), started the
-  // instant they leave.
+  // instant they leave. The Monitor tab counts as "still here" too - it's just another view onto
+  // the same Domination data (built from already-persisted history, see MonitorTab), and the user
+  // shouldn't see Crusade's own refresh cadence slow down just for having looked at it.
   useEffect(() => {
-    if (activeTab === "crusade") {
+    if (activeTab === "crusade" || activeTab === "monitor") {
       awayFromCrusadeSinceRef.current = null;
     } else if (awayFromCrusadeSinceRef.current === null) {
       awayFromCrusadeSinceRef.current = Date.now();
     }
   }, [activeTab]);
+
+  // Every planet's persisted history, for the Monitor tab - runs once on mount and keeps
+  // refetching every 5 minutes regardless of activeTab/login state, matching the backend poller's
+  // own crusade-refresh cadence (fetching any faster couldn't possibly turn up new data). See
+  // planetHistoryByPlanet's own declaration for why this lives here rather than inside MonitorTab.
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      const history = await fetchAllPlanetHistory();
+      if (!cancelled) setPlanetHistoryByPlanet(history);
+    }
+    void load();
+    const interval = setInterval(load, 5 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, []);
 
   // Manual refresh (req 3) - bypasses claimEligiblePlanet's cadence threshold entirely and isn't
   // capped by the 4-worker pool, since each refresh icon disables itself the instant it's
@@ -678,9 +780,12 @@ export function App() {
 
   // In-memory only (never persisted) - see trackedPlanetId's own comment. Untracking (clicking the
   // already-tracked planet again) clears the graph entirely; tracking a new one seeds a fresh state
-  // starting now. The TrackIconButton on every other planet is disabled while one is tracked (see
-  // isTrackDisabled), so toggleTrackedPlanetId only ever actually switches planets via this path
-  // when nothing was tracked yet.
+  // starting now, then immediately (best-effort, see fetchPlanetHistory) backfills it with whatever
+  // the poller has recorded for this planet's current capture-cycle era - the graph shows instantly,
+  // then grows a history tail in moments rather than waiting on the fetch. The TrackIconButton on
+  // every other planet is disabled while one is tracked (see isTrackDisabled), so
+  // toggleTrackedPlanetId only ever actually switches planets via this path when nothing was
+  // tracked yet.
   function toggleTrackedPlanet(planetId: string) {
     const next = toggleTrackedPlanetId(trackedPlanetId, planetId);
     trackedPlanetIdRef.current = next;
@@ -688,6 +793,20 @@ export function App() {
     const nextState = next ? createTrackedPlanetState(next, Date.now()) : null;
     trackedPlanetStateRef.current = nextState;
     setTrackedPlanetState(nextState);
+
+    if (next) {
+      fetchPlanetHistory(next)
+        .then((history) => {
+          // Stale-fetch guard: the user may have untracked or switched to a different planet
+          // before this resolved - a late history fetch for an old selection must never land on
+          // whatever's tracked now.
+          if (trackedPlanetIdRef.current !== next || !trackedPlanetStateRef.current) return;
+          const merged = mergeHistoryIntoTrackedPlanetState(trackedPlanetStateRef.current, history);
+          trackedPlanetStateRef.current = merged;
+          setTrackedPlanetState(merged);
+        })
+        .catch((error) => console.error(`[App] toggleTrackedPlanet(${next}): fetchPlanetHistory failed`, error));
+    }
   }
 
   async function exportPlayerData() {
@@ -710,12 +829,27 @@ export function App() {
     }
   }
 
+  // Global ranked-participant headcount (see RankedParticipantsCounter) - summed fresh each
+  // render, same as the rest of this component's derived-from-state values; planetRefreshState is
+  // small enough (dozens of planets) that memoizing this would be premature.
+  const rankedParticipantCounts = countRankedParticipants(planetRefreshState);
+  const totalHourlyRate = computeTotalHourlyRate(crusadeData?.planets ?? [], planetHistoryByPlanet, Date.now());
+
   return (
     <main
       onClick={() => setSelectedExpeditionId(null)}
       className="mx-auto flex min-h-screen w-full flex-col items-center bg-neutral-100 px-4 py-[5vh] text-center text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
     >
       <BuildTimestamp />
+      {devModeEnabled && (
+        <RankedParticipantsCounter
+          imperial={rankedParticipantCounts.imperial}
+          devastation={rankedParticipantCounts.devastation}
+          imperialRate={totalHourlyRate.imperial}
+          devastationRate={totalHourlyRate.devastation}
+        />
+      )}
+      {staleVersionDetected && <StaleVersionBanner onReloadNow={() => window.location.reload()} />}
       {toastMessage && <Toast message={toastMessage} onDismiss={() => setToastMessage(null)} />}
       <h1 className="cursor-pointer text-2xl font-semibold select-none" onClick={handleTitleTap}>
         TacOps
@@ -732,6 +866,7 @@ export function App() {
           </p>
 
           {devModeEnabled && <EnvironmentToggle value={environment} onChange={setEnvironment} />}
+          {devModeEnabled && isTauri() && <DataSourceToggle value={devDataSource} onChange={changeDevDataSource} />}
           <ViewModeToggle value={viewMode} onChange={setViewMode} />
 
           {activeTab !== "guildchat" && (
@@ -866,6 +1001,14 @@ export function App() {
             )}
             {activeTab === "mows" && <MowTable machinesOfWar={machinesOfWar} />}
             {activeTab === "guildchat" && <GuildChatTab environment={environment} />}
+            {activeTab === "arena" && (
+              <ArenaTab
+                environment={environment}
+                pvpPosition={resources?.pvpPosition ?? null}
+                webCredentials={{ userId, clientSecret }}
+              />
+            )}
+            {activeTab === "onslaught" && <OnslaughtTab onslaughtBoards={onslaughtBoards} />}
             {activeTab === "coverage" && <BoardCoverageTab />}
             {activeTab === "heroquests" && <HeroQuestsTab jars={heroQuestJars} />}
             {activeTab === "crusade" && (
@@ -881,6 +1024,18 @@ export function App() {
                 trackedPlanetId={trackedPlanetId}
                 trackedPlanetState={trackedPlanetState}
                 onToggleTrackPlanet={toggleTrackedPlanet}
+                historyByPlanet={planetHistoryByPlanet}
+                planetDefenses={planetDefenses}
+              />
+            )}
+            {activeTab === "monitor" && (
+              <MonitorTab
+                crusadeData={crusadeData}
+                planetRefreshState={planetRefreshState}
+                favoritedPlanetIds={favoritedPlanetIds}
+                error={crusadeError}
+                sectorMap={sectorMap}
+                historyByPlanet={planetHistoryByPlanet}
               />
             )}
           </div>
