@@ -1,0 +1,87 @@
+name: Sync upstream
+
+# Daily rebase of this fork's own commit(s) onto unrstuart/tacops master, so the fork always stays
+# "N commits ahead, 0 behind" with no merge commits piling up. The fork only *adds* files (fork/, this
+# workflow) and never edits upstream's, so the rebase can't conflict - this fork's customizations are
+# applied at build time by fork/build.mjs instead. Before pushing, the result is patched, built and
+# tested exactly as Cloudflare will build it, so a patch that no longer applies (or a broken upstream
+# build) fails here and never reaches the deployment. Pushing to master triggers the Cloudflare build,
+# whose deploy command applies pending D1 migrations before `wrangler deploy`.
+#
+# This rewrites master on every sync (force-push with lease) - pull with `git pull --rebase`, or
+# `git reset --hard origin/master` when there's no local work.
+
+on:
+  schedule:
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: sync
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: master
+          fetch-depth: 0
+          # Required, not optional: every rebased push re-creates this workflow file's commit, and the
+          # default GITHUB_TOKEN may never push workflow-file changes. SYNC_TOKEN is a PAT for this repo
+          # with Contents + Workflows read/write.
+          token: ${{ secrets.SYNC_TOKEN }}
+
+      - name: fetch upstream
+        id: fetch
+        run: |
+          git remote add upstream https://github.com/unrstuart/tacops.git
+          git fetch upstream master
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "Already up to date with upstream."
+            echo "behind=false" >> "$GITHUB_OUTPUT"
+          else
+            git log --oneline HEAD..upstream/master
+            echo "before=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            echo "behind=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: rebase onto upstream
+        if: steps.fetch.outputs.behind == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rebase upstream/master
+          echo "Fork commits now on top of upstream:"
+          git log --oneline upstream/master..HEAD
+
+      - name: setup node
+        if: steps.fetch.outputs.behind == 'true'
+        uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: 'npm'
+
+      - name: install dependencies
+        if: steps.fetch.outputs.behind == 'true'
+        run: npm ci
+
+      - name: patch and build (as Cloudflare will)
+        if: steps.fetch.outputs.behind == 'true'
+        run: node fork/build.mjs
+
+      - name: test
+        if: steps.fetch.outputs.behind == 'true'
+        run: npm test
+
+      - name: push
+        if: steps.fetch.outputs.behind == 'true'
+        run: |
+          # The patches above only touched the working tree - push the untouched rebased commits. The
+          # lease refuses the push if master moved since this run fetched it (e.g. a manual push).
+          git checkout -- .
+          git push --force-with-lease=master:${{ steps.fetch.outputs.before }} origin HEAD:master
