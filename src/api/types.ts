@@ -87,6 +87,26 @@ export interface CrusadeSectorMap {
   connections: CrusadeConnection[];
 }
 
+export interface PlanetDefenseCounts {
+  imperial: number;
+  devastation: number;
+}
+
+export type OnslaughtAlliance = "Imperial" | "Chaos" | "Xenos";
+
+export interface OnslaughtTierBoard {
+  // Matches the Rank enum's numeric values directly (1-21) - confirmed against a real capture,
+  // including the collapsed "X3 challenge" entries (tier 3/6/9/12 = Stone3/Iron3/Bronze3/Silver3).
+  tier: number;
+  boardId: string;
+  // True once this rank's "1"/"2" sub-tiers have collapsed away and only the repeatable "3"
+  // challenge battle remains (see onslaught-extraction.ts) - drives which rank icon variant
+  // (plain numeral vs. the "4"/challenge skull) the UI shows for this entry.
+  isChallenge: boolean;
+}
+
+export type OnslaughtBoards = Record<OnslaughtAlliance, OnslaughtTierBoard[]>;
+
 export interface CrusadeData {
   crusadeId: string;
   seasonNumber: number;

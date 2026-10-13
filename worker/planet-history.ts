@@ -36,13 +36,24 @@
 // src/api/fetch-crusade-data.ts's mapCrusadeResponseData per-planet mapping, following the exact
 // precedent worker/poller.ts already set by duplicating findActivePhase rather than importing that
 // file (which pulls in @tauri-apps/api/core).
-import { isDominationSunk, pointsRemaining } from "../src/crusade/crusade-domination-view-model";
+import { computeConquestProgress, isDominationSunk, pointsRemaining } from "../src/crusade/crusade-domination-view-model";
 import type { CrusadePlanet } from "../src/api/types";
 
 export interface PlanetHistorySample {
   atMs: number;
   imperialRemaining: number;
   devastationRemaining: number;
+  // Raw accrued points and raw capture threshold at this moment, recorded alongside the legacy
+  // *Remaining fields above starting 2026-10-13 - optional because older already-stored samples
+  // won't have them. See src/crusade/planet-tracker-view-model.ts's TrackedPlanetSample (the
+  // client-side mirror of this same shape) for the full rationale.
+  // TODO(2026-10-20): the current Domination season ends 2026-10-17 - once that's passed, every
+  // live era's history will have been recorded entirely after this change, so these can become
+  // required and imperialRemaining/devastationRemaining can be deleted outright.
+  imperialAccrued?: number;
+  devastationAccrued?: number;
+  imperialThreshold?: number;
+  devastationThreshold?: number;
 }
 
 // Maps one raw planetsData[] entry (GET_CRUSADE's own shape, already in memory in worker/poller.ts
@@ -74,19 +85,30 @@ export interface PlanetHistoryRow {
   atMs: number;
   imperialRemaining: number;
   devastationRemaining: number;
+  imperialAccrued?: number;
+  devastationAccrued?: number;
+  imperialThreshold?: number;
+  devastationThreshold?: number;
   sunk: boolean;
 }
 
 // Pure: what to write for one planet at this tick. Only ever called on planets already filtered to
 // struggleData != null (the caller's job - see worker/poller.ts), so pointsRemaining never returns
-// Infinity here in practice.
+// Infinity here in practice (and computeConquestProgress never returns null here either).
+// TODO(2026-10-20): stop writing imperialRemaining/devastationRemaining once the season ending
+// 2026-10-17 is over - see PlanetHistorySample's own comment.
 export function buildHistoryRow(planet: CrusadePlanet, atMs: number): PlanetHistoryRow {
   const remaining = pointsRemaining(planet);
+  const progress = computeConquestProgress(planet);
   return {
     planetId: planet.planetId,
     atMs,
     imperialRemaining: remaining.imperial,
     devastationRemaining: remaining.devastation,
+    imperialAccrued: progress?.imperialCurrent,
+    devastationAccrued: progress?.devastationCurrent,
+    imperialThreshold: progress?.imperialThreshold,
+    devastationThreshold: progress?.devastationThreshold,
     sunk: isDominationSunk(planet),
   };
 }
@@ -252,7 +274,15 @@ export function compressHistorySamples(samples: readonly PlanetHistorySample[]):
 // sample on an era reset (sunk -> trackable) or when there's no existing entry yet (first tick ever
 // recorded for this planet).
 export function appendToHistoryCache(existing: HistoryCacheEntry | null, row: PlanetHistoryRow): HistoryCacheEntry {
-  const sample: PlanetHistorySample = { atMs: row.atMs, imperialRemaining: row.imperialRemaining, devastationRemaining: row.devastationRemaining };
+  const sample: PlanetHistorySample = {
+    atMs: row.atMs,
+    imperialRemaining: row.imperialRemaining,
+    devastationRemaining: row.devastationRemaining,
+    imperialAccrued: row.imperialAccrued,
+    devastationAccrued: row.devastationAccrued,
+    imperialThreshold: row.imperialThreshold,
+    devastationThreshold: row.devastationThreshold,
+  };
   const samples = !existing || isEraReset(existing.lastSunk, row.sunk) ? [sample] : compressHistorySamples([...existing.samples, sample]);
   return { samples, lastSunk: row.sunk };
 }

@@ -50,6 +50,10 @@ describe("buildHistoryRow", () => {
       atMs: 5000,
       imperialRemaining: 900,
       devastationRemaining: 950,
+      imperialAccrued: 100,
+      devastationAccrued: 50,
+      imperialThreshold: 1000,
+      devastationThreshold: 1000,
       sunk: false,
     });
   });

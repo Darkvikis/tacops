@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
-import { boardImageUrl } from "../pvp/board-image";
+import { BoardImage } from "./BoardImage";
 import { fetchSpawnPointManifest, resolveCharacterSpawnPositions, type SpawnPointManifest } from "../pvp/board-layout";
 import { characterPortraitUrl } from "../characters/character-portraits";
 
@@ -24,13 +24,13 @@ interface ArenaBoardMapProps {
 // node is attached and reads the size synchronously when it's already cached; onLoad still covers
 // the normal first-fetch case.
 //
-// handleImgRef MUST be wrapped in useCallback (empty deps, so its identity never changes) - a
-// plain inline function is recreated every render, and React re-invokes a *changed* ref callback
-// on every render it sees a new identity, not just on real mount/unmount. For an already-cached
-// image that's an infinite loop: ref fires -> sets state -> re-render -> new function identity ->
-// ref fires again -> sets state again -> ... (confirmed as the real cause of a white-screen
-// "Maximum update depth exceeded" crash from an earlier version of this fix that used a plain
-// inline function here).
+// handleImgRef (passed through to BoardImage's own <img>) MUST be wrapped in useCallback (empty
+// deps, so its identity never changes) - a plain inline function is recreated every render, and
+// React re-invokes a *changed* ref callback on every render it sees a new identity, not just on
+// real mount/unmount. For an already-cached image that's an infinite loop: ref fires -> sets state
+// -> re-render -> new function identity -> ref fires again -> sets state again -> ... (confirmed
+// as the real cause of a white-screen "Maximum update depth exceeded" crash from an earlier
+// version of this fix that used a plain inline function here).
 export function ArenaBoardMap({ boardId, spawnPointsSet, lineup }: ArenaBoardMapProps) {
   const [manifest, setManifest] = useState<SpawnPointManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -61,15 +61,7 @@ export function ArenaBoardMap({ boardId, spawnPointsSet, lineup }: ArenaBoardMap
 
   return (
     <div className="relative inline-block max-w-full">
-      <img
-        ref={handleImgRef}
-        src={boardImageUrl(boardId)}
-        alt={boardId}
-        title={boardId}
-        className="block max-w-full rounded"
-        onLoad={(e) => setNaturalSize({ width: e.currentTarget.naturalWidth, height: e.currentTarget.naturalHeight })}
-        onError={() => setError(`Failed to load map art for ${boardId}`)}
-      />
+      <BoardImage boardId={boardId} imgRef={handleImgRef} className="block max-w-full rounded" onLoadSize={setNaturalSize} />
       {naturalSize &&
         positions.map((position) => (
           <img
